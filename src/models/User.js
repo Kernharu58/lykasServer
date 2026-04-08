@@ -2,20 +2,6 @@ const mongoose = require("mongoose");
 
 const userSchema = new mongoose.Schema(
   {
-    displayName: { type: String, required: true, trim: true },
-    email: { type: String, required: true, unique: true, lowercase: true },
-    password: { type: String, required: true, minlength: 6 },
-    role: { type: String, enum: ["user", "admin"], default: "user" },
-    // 👉 Ensure this is exactly here:
-    favorites: [
-      {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: "Pet",
-      },
-    ],
-    volunteerHours: { type: Number, default: 0 },
-  },
-  {
     displayName: {
       type: String,
       required: [true, "Display name is required"],
@@ -37,13 +23,23 @@ const userSchema = new mongoose.Schema(
       enum: ["user", "admin"],
       default: "user",
     },
+    favorites: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Pet",
+      },
+    ],
     volunteerHours: {
       type: Number,
       default: 0,
     },
+    profilePicture: { 
+      type: String, 
+      default: "" // Starts empty
+    },
   },
-
-  { timestamps: true },
+  
+  { timestamps: true }
 );
 
 module.exports = mongoose.model("User", userSchema);

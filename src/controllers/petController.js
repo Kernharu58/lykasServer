@@ -1,12 +1,12 @@
 const Pet = require("../models/Pet");
 
-// @desc    Fetch all adoptable pets
-// @route   GET /api/pets
-// @access  Public (Anyone can view pets)
+// @desc    Fetch all pets that are either Available OR Pending
 const getPets = async (_req, res) => {
   try {
-    // Only fetch pets that are currently "Available"
-    const pets = await Pet.find({ status: "Available" });
+    // 👉 UPDATED: Fetch pets that are either Available OR Pending
+    const pets = await Pet.find({ 
+      status: { $in: ["Available", "Pending"] } 
+    });
     res.status(200).json(pets);
   } catch (error) {
     res.status(500).json({ message: "Server Error", error: error.message });
@@ -14,8 +14,6 @@ const getPets = async (_req, res) => {
 };
 
 // @desc    Fetch a single pet by ID
-// @route   GET /api/pets/:id
-// @access  Public
 const getPetById = async (req, res) => {
   try {
     const pet = await Pet.findById(req.params.id);

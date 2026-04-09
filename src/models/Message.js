@@ -2,8 +2,15 @@ const mongoose = require("mongoose");
 
 const messageSchema = new mongoose.Schema(
   {
+    // 👉 NEW: We must track which user this chat belongs to
+    userId: { 
+      type: mongoose.Schema.Types.ObjectId, 
+      ref: 'User',
+      required: true 
+    },
     text: { type: String, required: true },
-    sender: { type: String, required: true }, // "user" or "shelter"
+    // Sender can now be 'user' or 'shelter'
+    sender: { type: String, enum: ['user', 'shelter'], required: true }, 
     time: { type: String, required: true },
   },
   { timestamps: true }

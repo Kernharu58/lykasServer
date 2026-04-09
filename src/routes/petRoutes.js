@@ -7,6 +7,8 @@ const {
   createPet,
   getMyPets,
   adoptPet,
+  updatePet,
+  deletePet
 } = require("../controllers/petController");
 
 // Basic Pet Operations
@@ -16,7 +18,10 @@ router.route("/").get(getPets).post(createPet);
 router.get("/my-pets", protect, getMyPets);
 
 // Specific Pet Details & Actions
-router.route("/:id").get(getPetById);
+router.route("/:id")
+  .get(getPetById)
+  .put(updatePet)     // 👈 ADDED: Listens for EditModal saves
+  .delete(deletePet); // 👈 ADDED: Listens for Trash clicks
 router.post("/:id/adopt", protect, adoptPet);
 
 module.exports = router;

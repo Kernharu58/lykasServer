@@ -109,4 +109,33 @@ const adoptPet = async (req, res) => {
   }
 };
 
-module.exports = { getPets, getPetById, createPet, getMyPets, adoptPet };
+// @desc    Update a pet's details
+// @route   PUT /api/pets/:id
+const updatePet = async (req, res) => {
+  try {
+    // Find the pet by ID and update it with the new data from the form
+    const pet = await Pet.findByIdAndUpdate(req.params.id, req.body, { 
+      new: true // This tells MongoDB to return the updated pet, not the old one
+    });
+    
+    if (!pet) return res.status(404).json({ message: "Pet not found" });
+    res.status(200).json(pet);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// @desc    Delete a pet permanently
+// @route   DELETE /api/pets/:id
+const deletePet = async (req, res) => {
+  try {
+    const pet = await Pet.findByIdAndDelete(req.params.id);
+    if (!pet) return res.status(404).json({ message: "Pet not found" });
+    
+    res.status(200).json({ message: "Pet successfully removed from shelter." });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+module.exports = { getPets, getPetById, createPet, getMyPets, adoptPet,updatePet,deletePet };

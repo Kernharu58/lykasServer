@@ -9,6 +9,7 @@ const Message = require("./models/Message"); // Import the new model
 // Security Middleware
 const helmet = require("helmet");
 const rateLimit = require("express-rate-limit");
+const User = require("./models/User");
 
 // Load environment variables from the .env file
 dotenv.config();
@@ -126,4 +127,53 @@ app.get("/api/messages", async (req, res) => {
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
+});
+
+// 👉 GET: Fetch chat history for a SPECIFIC user (Used by Mobile App)
+app.get("/api/messages/:userId", async (req, res) => {
+  try {
+    const messages = await Message.find({ userId: req.params.userId }).sort({ createdAt: 1 }); 
+    res.status(200).json(messages);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// 👉 GET: Fetch ALL unique chat sessions (Used by Admin Dashboard Sidebar)
+app.get("/api/chat-sessions", async (req, res) => {
+  try {
+    // This finds all distinct users who have sent a message
+    const activeUsers = await Message.distinct('userId');
+    // You might want to populate this with User details (name, email) later!
+    res.status(200).json(activeUsers); 
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+io.on("connection", (socket) => {
+  console.log("🟢 User connected:", socket.id);
+
+  // 👉 NEW: Users "join" a private room based on their User ID
+  socket.on("joinRoom", (userId) => {
+    socket.join(userId);
+    console.log(`User joined room: ${userId}`);
+  });
+
+  // Handle incoming messages
+  socket.on("sendMessage", async (data) => {
+    try {
+      // data must now include: { userId, text, sender, time }
+      const savedMessage = await Message.create(data);
+      
+      // 👉 NEW: Only emit the message to the specific user's room!
+      io.to(data.userId).emit("receiveMessage", savedMessage);
+    } catch (error) {
+      console.error("Error saving message:", error);
+    }
+  });
+
+  socket.on("disconnect", () => {
+    console.log("🔴 User disconnected");
+  });
 });

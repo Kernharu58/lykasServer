@@ -7,6 +7,7 @@ const getPets = async (_req, res) => {
     const pets = await Pet.find({ 
       status: { $in: ["Available", "Pending"] } 
     });
+    
     res.status(200).json(pets);
   } catch (error) {
     res.status(500).json({ message: "Server Error", error: error.message });

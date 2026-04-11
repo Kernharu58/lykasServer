@@ -2,7 +2,11 @@ const Appointment = require("../models/Appointment");
 
 const getAppointments = async (req, res) => {
   try {
-    const appointments = await Appointment.find().sort({ date: 1 });
+    // 👉 FIX: Added .populate() to pull in the user's actual name, email, and picture!
+    const appointments = await Appointment.find()
+      .populate("enrolledUsers.user", "displayName email profilePicture")
+      .sort({ date: 1 });
+      
     res.status(200).json(appointments);
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -118,12 +122,42 @@ const createTestShift = async (req, res) => {
   }
 };
 
-// Make sure ALL of these are exported!
+// 👉 NEW: Delete a shift entirely
+const deleteAppointment = async (req, res) => {
+  try {
+    const appointment = await Appointment.findByIdAndDelete(req.params.id);
+    if (!appointment) return res.status(404).json({ message: "Shift not found" });
+    
+    res.status(200).json({ message: "Shift successfully deleted." });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// 👉 NEW: Update an existing shift
+const updateAppointment = async (req, res) => {
+  try {
+    const appointment = await Appointment.findByIdAndUpdate(
+      req.params.id,
+      req.body,
+      { new: true, runValidators: true } // Return the updated document
+    );
+    if (!appointment) return res.status(404).json({ message: "Shift not found" });
+    
+    res.status(200).json(appointment);
+  } catch (error) {
+    res.status(400).json({ message: error.message });
+  }
+};
+
+// 👉 UPDATE YOUR EXPORTS: Make sure updateAppointment is included at the very bottom!
 module.exports = {
   getAppointments,
   createAppointment,
   enrollInAppointment,
   getMyAppointments,
   cancelEnrollment,
-  createTestShift, // Exporting the test generator
+  createTestShift, 
+  deleteAppointment,
+  updateAppointment // <--- ADD IT HERE
 };

@@ -8,7 +8,10 @@ const {
   getMe,                  
   uploadProfilePicture,
   updateProfile, // 👉 ADDED
-  googleLogin
+  googleLogin,
+  getAllUsers,
+  updateUserRole,
+  deleteUser
 } = require("../controllers/authController");
 
 // Middleware to protect routes and handle file uploads
@@ -38,5 +41,10 @@ router.get("/favorites", protect, getFavorites);
 
 // @desc    Google OAuth 2.0 Login Route
 router.post("/google", googleLogin);
+
+// 👉 NEW: Admin User Management Routes
+router.get("/users", getAllUsers);
+router.put("/users/:id/role", updateUserRole);
+router.delete("/users/:id", deleteUser);
 
 module.exports = router;

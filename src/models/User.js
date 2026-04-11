@@ -18,9 +18,10 @@ const userSchema = new mongoose.Schema(
       required: [true, "Password is required"], 
       minlength: [8, "Password must be at least 8 characters"] 
     },
+    // 👉 FIX: Added "staff" to the allowed roles
     role: { 
       type: String, 
-      enum: ["user", "admin"], 
+      enum: ["user", "staff", "admin"], 
       default: "user" 
     },
     favorites: [
@@ -34,7 +35,7 @@ const userSchema = new mongoose.Schema(
       default: 0 
     },
   },
-  { timestamps: true } // This must be the second argument
+  { timestamps: true }
 );
 
 module.exports = mongoose.model("User", userSchema);

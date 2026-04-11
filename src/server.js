@@ -65,16 +65,34 @@ app.get("/api/messages/:userId", async (req, res) => {
 // Fetch ALL unique chat sessions (Used by Admin Dashboard Sidebar)
 app.get("/api/chat-sessions", async (req, res) => {
   try {
-    // This finds all distinct users who have sent a message
-    const activeUserIds = await Message.distinct('userId');
-    // Fetch actual user objects for the sidebar
+    // 1. Aggregate messages to find the most recent message per user
+    const latestMessages = await Message.aggregate([
+      { $sort: { createdAt: -1 } }, // Sort all messages from newest to oldest
+      {
+        $group: {
+          _id: "$userId", // Group by userId
+          latestMessageAt: { $first: "$createdAt" } // Grab the timestamp of their newest message
+        }
+      },
+      { $sort: { latestMessageAt: -1 } } // Sort the grouped list so newest is on top
+    ]);
+
+    // Extract just the user IDs from the sorted list
+    const activeUserIds = latestMessages.map(msg => msg._id);
+
+    // 2. Fetch the actual user objects (This automatically includes profilePicture and displayName!)
     const activeUsers = await User.find({ _id: { $in: activeUserIds } }).select('-password');
-    res.status(200).json(activeUsers); 
+
+    // 3. The 'activeUsers' query doesn't guarantee order, so we map them back to our sorted ID list
+    const sortedUsers = activeUserIds.map(id =>
+      activeUsers.find(user => user._id.toString() === id.toString())
+    ).filter(Boolean); // Filter out nulls in case a user account was deleted
+
+    res.status(200).json(sortedUsers); 
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
 });
-
 // --- Database Connection ---
 const connectDB = async () => {
   try {
@@ -147,3 +165,4 @@ connectDB().then(() => {
 // Add this right below where you define app.use("/api/auth", authRoutes);
 const settingsRoutes = require("./routes/settingsRoutes");
 app.use("/api/settings", settingsRoutes);
+

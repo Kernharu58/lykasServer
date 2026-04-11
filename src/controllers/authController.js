@@ -2,14 +2,13 @@ const User = require("../models/User");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 
-
 // @desc    Register a new user
 // @route   POST /api/auth/register
 const registerUser = async (req, res) => {
   try {
     const { displayName, email, password } = req.body;
 
-    // 👉 ADD THIS: Backend Password Security Check
+    // Backend Password Security Check
     const strongPasswordRegex =
       /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{8,}$/;
     if (!strongPasswordRegex.test(password)) {
@@ -55,6 +54,7 @@ const registerUser = async (req, res) => {
     res.status(500).json({ message: "Server error", error: error.message });
   }
 };
+
 // @desc    Authenticate a user & get token
 // @route   POST /api/auth/login
 const loginUser = async (req, res) => {
@@ -139,10 +139,7 @@ const getFavorites = async (req, res) => {
   }
 };
 
-// Update your module.exports at the bottom
-
-
-// @desc    Get current logged in user details (useful for fetching the profile pic on load)
+// @desc    Get current logged in user details
 // @route   GET /api/auth/me
 const getMe = async (req, res) => {
   try {
@@ -170,13 +167,38 @@ const uploadProfilePicture = async (req, res) => {
       profilePicture: user.profilePicture 
     });
   } catch (error) {
-    // 👉 ADD THIS LINE to force the terminal to print the exact Cloudinary error:
     console.error("🔴 CLOUDINARY UPLOAD ERROR:", error); 
-    
     res.status(500).json({ message: "Server error", error: error.message });
   }
 };
 
+// 👉 NEW: Update Profile details (Display Name)
+// @route   PUT /api/auth/profile
+const updateProfile = async (req, res) => {
+  try {
+    const { displayName } = req.body;
+
+    const user = await User.findById(req.user._id);
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    user.displayName = displayName || user.displayName;
+    const updatedUser = await user.save();
+
+    res.status(200).json({
+      message: "Profile updated successfully",
+      user: {
+        id: updatedUser._id,
+        displayName: updatedUser.displayName,
+        email: updatedUser.email,
+        profilePicture: updatedUser.profilePicture,
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ message: "Server error", error: error.message });
+  }
+};
 
 const { OAuth2Client } = require("google-auth-library");
 const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
@@ -186,32 +208,25 @@ const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 const googleLogin = async (req, res) => {
   try {
     const { idToken } = req.body;
-
-    // 1. Verify the token with Google
     const ticket = await client.verifyIdToken({
       idToken,
       audience: process.env.GOOGLE_CLIENT_ID,
     });
 
-    // 2. Extract the user's Google profile info
     const payload = ticket.getPayload();
     const { email, name, picture } = payload;
 
-    // 3. Check if this user already exists in your MongoDB
     let user = await User.findOne({ email });
 
-    // 4. If they don't exist, create a new account for them instantly!
     if (!user) {
       user = await User.create({
         displayName: name,
         email: email,
-        // Give them a random, impossible password since they login with Google
         password: Math.random().toString(36).slice(-8) + Date.now(), 
-        profilePicture: picture, // Use their Google photo!
+        profilePicture: picture, 
       });
     }
 
-    // 5. Generate your app's standard JWT Token
     const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, {
       expiresIn: "7d",
     });
@@ -231,6 +246,14 @@ const googleLogin = async (req, res) => {
   }
 };
 
-
-// 👉 Make sure to export them!
-module.exports = { registerUser, loginUser, toggleFavorite, getFavorites, getMe, uploadProfilePicture, googleLogin };
+// 👉 Make sure to export updateProfile!
+module.exports = { 
+  registerUser, 
+  loginUser, 
+  toggleFavorite, 
+  getFavorites, 
+  getMe, 
+  uploadProfilePicture, 
+  updateProfile, 
+  googleLogin 
+};

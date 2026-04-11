@@ -143,3 +143,7 @@ connectDB().then(() => {
     console.log(`Server is running on port ${PORT}`);
   });
 });
+
+// Add this right below where you define app.use("/api/auth", authRoutes);
+const settingsRoutes = require("./routes/settingsRoutes");
+app.use("/api/settings", settingsRoutes);

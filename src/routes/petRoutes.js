@@ -10,7 +10,8 @@ const {
   getMyPets,
   adoptPet,
   updatePet,
-  deletePet
+  deletePet,
+  getPendingAdoptions
 } = require("../controllers/petController");
 
 // Basic Pet Operations
@@ -21,6 +22,8 @@ router.route("/")
 
 // User-Specific Pet Operations (Must be above /:id)
 router.get("/my-pets", protect, getMyPets);
+// Admin-Specific Operations
+router.get("/pending-adoptions", getPendingAdoptions);
 
 // Specific Pet Details & Actions
 router.route("/:id")

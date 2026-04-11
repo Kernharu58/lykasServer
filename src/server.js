@@ -65,30 +65,32 @@ app.get("/api/messages/:userId", async (req, res) => {
 // Fetch ALL unique chat sessions (Used by Admin Dashboard Sidebar)
 app.get("/api/chat-sessions", async (req, res) => {
   try {
-    // 1. Aggregate messages to find the most recent message per user
+    // 1. Fetch ALL users in the database (excluding passwords)
+    const allUsers = await User.find({}).select('-password');
+
+    // 2. Find the most recent message for each user to see who is active
     const latestMessages = await Message.aggregate([
-      { $sort: { createdAt: -1 } }, // Sort all messages from newest to oldest
+      { $sort: { createdAt: -1 } }, 
       {
         $group: {
-          _id: "$userId", // Group by userId
-          latestMessageAt: { $first: "$createdAt" } // Grab the timestamp of their newest message
+          _id: "$userId",
+          latestMessageAt: { $first: "$createdAt" } 
         }
       },
-      { $sort: { latestMessageAt: -1 } } // Sort the grouped list so newest is on top
+      { $sort: { latestMessageAt: -1 } } 
     ]);
 
-    // Extract just the user IDs from the sorted list
-    const activeUserIds = latestMessages.map(msg => msg._id);
+    const activeUserIds = latestMessages.map(msg => msg._id.toString());
 
-    // 2. Fetch the actual user objects (This automatically includes profilePicture and displayName!)
-    const activeUsers = await User.find({ _id: { $in: activeUserIds } }).select('-password');
+    // 3. Sort users: Active users on top, inactive users at the bottom
+    const activeUsers = activeUserIds.map(id =>
+      allUsers.find(user => user._id.toString() === id)
+    ).filter(Boolean);
 
-    // 3. The 'activeUsers' query doesn't guarantee order, so we map them back to our sorted ID list
-    const sortedUsers = activeUserIds.map(id =>
-      activeUsers.find(user => user._id.toString() === id.toString())
-    ).filter(Boolean); // Filter out nulls in case a user account was deleted
+    const inactiveUsers = allUsers.filter(user => !activeUserIds.includes(user._id.toString()));
 
-    res.status(200).json(sortedUsers); 
+    // 4. Send the combined list back to the admin dashboard
+    res.status(200).json([...activeUsers, ...inactiveUsers]); 
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

@@ -123,4 +123,21 @@ const deletePet = async (req, res) => {
   }
 };
 
-module.exports = { getPets, getPetById, createPet, getMyPets, adoptPet, updatePet, deletePet };
+// 👉 NEW: Get all pending adoptions with user info
+// @route   GET /api/pets/pending-adoptions
+const getPendingAdoptions = async (req, res) => {
+  try {
+    // Find all pets that are pending, and populate the 'owner' field with the user's details
+    const pendingPets = await Pet.find({ status: "Pending" })
+      .populate("owner", "displayName email profilePicture"); 
+      
+    res.status(200).json(pendingPets);
+  } catch (error) {
+    res.status(500).json({ message: "Server Error", error: error.message });
+  }
+};
+
+// ... keep existing functions ...
+
+// 👉 Make sure to add it to exports!
+module.exports = { getPets, getPetById, createPet, getMyPets, adoptPet, updatePet, deletePet, getPendingAdoptions };

@@ -200,89 +200,11 @@ const updateProfile = async (req, res) => {
   }
 };
 
-const { OAuth2Client } = require("google-auth-library");
-const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
 // @desc    Login or Register via Google
 // @route   POST /api/auth/google
 // 👉 REPLACED: Highly detailed debug version of Google Login
-const googleLogin = async (req, res) => {
-  console.log("\n========== 🚀 GOOGLE AUTH DEBUG START ==========");
-  console.log("[Step 1] Hit the /api/auth/google endpoint.");
-  
-  const { idToken } = req.body;
-  
-  if (!idToken) {
-    console.log("❌ [ERROR] The mobile app did not send an idToken in the request body!");
-    console.log("========== 🛑 GOOGLE AUTH DEBUG END ==========\n");
-    return res.status(400).json({ message: "No ID token provided" });
-  }
 
-  console.log(`[Step 2] Received ID Token from phone (Starts with: ${idToken.substring(0, 20)}...)`);
-  console.log(`[Step 3] Verifying token using Backend Client ID: ${process.env.GOOGLE_CLIENT_ID}`);
-
-  try {
-    // Attempt to verify the token with Google's servers
-    const ticket = await googleClient.verifyIdToken({
-      idToken,
-      audience: process.env.GOOGLE_CLIENT_ID, 
-    });
-
-    console.log("[Step 4] ✅ Token successfully verified by Google's servers!");
-    
-    const payload = ticket.getPayload();
-    console.log("[Step 5] Payload extracted from Google:", {
-      email: payload.email,
-      name: payload.name,
-      email_verified: payload.email_verified
-    });
-
-    // Check if the user already exists in your MongoDB
-    let user = await User.findOne({ email: payload.email });
-    
-    if (user) {
-      console.log(`[Step 6] Found existing user in database: ${user.email}. Logging them in.`);
-    } else {
-      console.log(`[Step 6] User not found. Creating a brand new account for: ${payload.email}`);
-      user = await User.create({
-        displayName: payload.name,
-        email: payload.email,
-        password: Math.random().toString(36).slice(-10) + "A1!", // Generate random secure password
-        role: "user"
-      });
-      console.log("[Step 7] ✅ New user successfully saved to MongoDB!");
-    }
-
-    // Generate JWT for session
-    const token = generateToken(user._id);
-    console.log("[Step 8] ✅ Backend JWT token generated. Sending success response back to phone!");
-    console.log("========== 🏁 GOOGLE AUTH DEBUG END ==========\n");
-
-    res.status(200).json({
-      token,
-      user: {
-        _id: user._id,
-        displayName: user.displayName,
-        email: user.email,
-        role: user.role,
-        profilePicture: user.profilePicture
-      },
-    });
-
-  } catch (error) {
-    console.log("❌ [CRITICAL ERROR] The process crashed!");
-    console.log("Error Name:", error.name);
-    console.log("Error Message:", error.message);
-    
-    // Specifically catch audience mismatches
-    if (error.message.includes("audience")) {
-      console.log("💡 HINT: An 'audience' error means the Web Client ID in your Node.js .env file does not match the Web Client ID you put in your React Native app!");
-    }
-
-    console.log("========== 🛑 GOOGLE AUTH DEBUG END ==========\n");
-    res.status(500).json({ message: "Google Auth Failed", error: error.message });
-  }
-};
 // ... keep all your existing authController code ...
 
 // 👉 NEW: Get all users for the Admin Dashboard
@@ -326,9 +248,70 @@ const deleteUser = async (req, res) => {
   }
 };
 
+
+// Replace the googleLogin function in src/controllers/authController.js:
+
+const { OAuth2Client } = require("google-auth-library");
+const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
+
+const googleLogin = async (req, res) => {
+  console.log("\n========== 🚀 GOOGLE AUTH DEBUG START ==========");
+  const { idToken } = req.body;
+  
+  if (!idToken) {
+    return res.status(400).json({ message: "No ID token provided" });
+  }
+
+  try {
+    // FIX 1: Use 'client' instead of 'googleClient'
+    // FIX 2: Include ALL Client IDs in the audience array to prevent mismatch
+    const ticket = await client.verifyIdToken({
+      idToken,
+      audience: [
+        process.env.GOOGLE_CLIENT_ID,
+        process.env.ANDROID_CLIENT_ID,
+        process.env.IOS_CLIENT_ID
+      ].filter(Boolean) // Filters out any undefined env vars
+    });
+    
+    const payload = ticket.getPayload();
+    let user = await User.findOne({ email: payload.email });
+    
+    if (!user) {
+      user = await User.create({
+        displayName: payload.name,
+        email: payload.email,
+        password: Math.random().toString(36).slice(-10) + "A1!", 
+        role: "user"
+      });
+    }
+
+    // FIX 3: Replaced undefined `generateToken` with direct JWT signing
+    const jwtToken = jwt.sign({ id: user._id }, process.env.JWT_SECRET, {
+      expiresIn: "7d",
+    });
+
+    res.status(200).json({
+      token: jwtToken,
+      user: {
+        _id: user._id,
+        displayName: user.displayName,
+        email: user.email,
+        role: user.role,
+        profilePicture: user.profilePicture
+      },
+    });
+
+  } catch (error) {
+    console.log("❌ [CRITICAL ERROR] Google Auth Failed:", error.message);
+    res.status(500).json({ message: "Google Auth Failed", error: error.message });
+  }
+};
+
 // 👉 Make sure to add the new functions to the exports at the bottom!
 module.exports = { 
   registerUser, loginUser, toggleFavorite, getFavorites, getMe, 
   uploadProfilePicture, updateProfile, googleLogin,
   getAllUsers, updateUserRole, deleteUser // <--- ADDED THESE THREE
 };
+

@@ -168,3 +168,4 @@ connectDB().then(() => {
 const settingsRoutes = require("./routes/settingsRoutes");
 app.use("/api/settings", settingsRoutes);
 
+const message = require("./models/Message"); // Import the new model

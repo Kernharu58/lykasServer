@@ -18,11 +18,19 @@ const userSchema = new mongoose.Schema(
       required: [true, "Password is required"], 
       minlength: [8, "Password must be at least 8 characters"] 
     },
-    // 👉 FIX: Added "staff" to the allowed roles
     role: { 
       type: String, 
-      enum: ["user", "staff", "admin"], 
+      enum: ["user", "staff", "admin", "super_admin"], 
       default: "user" 
+    },
+    status: {
+      type: String,
+      enum: ["active", "suspended", "locked"],
+      default: "active"
+    },
+    lockedUntil: { 
+      type: Date, 
+      default: null 
     },
     favorites: [
       {

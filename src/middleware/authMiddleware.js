@@ -1,37 +1,52 @@
+// C:\Users\Kernharu\Desktop\capstone_mid\lykas\services\src\middleware\authMiddleware.js
 const jwt = require("jsonwebtoken");
 const User = require("../models/User");
 
 const protect = async (req, res, next) => {
   let token;
-
-  // Check if the request has an authorization header that starts with "Bearer"
-  if (
-    req.headers.authorization &&
-    req.headers.authorization.startsWith("Bearer")
-  ) {
+  if (req.headers.authorization && req.headers.authorization.startsWith("Bearer")) {
     try {
-      // 1. Extract the token from the header (Format is "Bearer eyJhbGciOiJIUzI1...")
       token = req.headers.authorization.split(" ")[1];
-
-      // 2. Verify the token using your secret key from the .env file
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
-
-      // 3. Find the user in the database using the ID inside the token
-      // The `.select("-password")` part ensures we DON'T send the hashed password back
       req.user = await User.findById(decoded.id).select("-password");
+      
+      if (!req.user) return res.status(401).json({ message: "User not found" });
 
-      // 4. Move on to the actual route controller
+      // Check account status
+      if (req.user.status === 'suspended') {
+        return res.status(403).json({ message: "Account is suspended." });
+      }
+      if (req.user.status === 'locked') {
+        if (req.user.lockedUntil && new Date() < req.user.lockedUntil) {
+           return res.status(403).json({ message: `Account locked until ${req.user.lockedUntil}` });
+        } else if (req.user.lockedUntil && new Date() >= req.user.lockedUntil) {
+           // Auto-unlock
+           req.user.status = 'active';
+           req.user.lockedUntil = null;
+           await req.user.save();
+        } else {
+           return res.status(403).json({ message: "Account is locked permanently." });
+        }
+      }
+
       next();
     } catch (error) {
-      console.error(error);
       res.status(401).json({ message: "Not authorized, token failed" });
     }
   }
 
-  // If there is no token at all, block the request
   if (!token) {
     res.status(401).json({ message: "Not authorized, no token provided" });
   }
 };
 
-module.exports = { protect };
+const restrictTo = (...roles) => {
+    return (req, res, next) => {
+        if (!req.user || !roles.includes(req.user.role)) {
+            return res.status(403).json({ message: "You do not have permission to perform this action." });
+        }
+        next();
+    };
+};
+
+module.exports = { protect, restrictTo };

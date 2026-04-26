@@ -1,7 +1,11 @@
 const express = require("express");
 const mongoose = require("mongoose");
+const dns = require("dns");
 const cors = require("cors");
 const dotenv = require("dotenv");
+
+// Use reliable public DNS servers for MongoDB SRV record resolution
+dns.setServers(["8.8.8.8", "1.1.1.1"]);
 
 const http = require("http");
 const { Server } = require("socket.io");

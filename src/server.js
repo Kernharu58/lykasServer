@@ -34,7 +34,7 @@ app.use(helmet());
 // 2. Prevents spam/DDoS attacks (Max 100 requests per 15 minutes per IP)
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 100,
+  max: 500,
   message: "Too many requests from this IP, please try again later."
 });
 app.use("/api/", limiter);
@@ -155,11 +155,18 @@ io.on("connection", (socket) => {
   });
 });
 
-// ✅ FIX 2: Removed duplicate `require("./models/Message")` that was here at the bottom
 connectDB().then(() => {
   server.listen(PORT, () => {
     console.log(`Server is running on port ${PORT}`);
   });
 });
 
-console.log(require('crypto').randomBytes(64).toString('hex'))
+app.use((err, req, res, next) => {
+  console.error(err.stack);
+  res.status(500).json({ message: "Something went wrong!" });
+});
+
+app.use((req, res) => {
+  res.status(404).json({ message: "Route not found" });
+});
+

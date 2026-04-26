@@ -157,3 +157,5 @@ connectDB().then(() => {
     console.log(`Server is running on port ${PORT}`);
   });
 });
+
+console.log(require('crypto').randomBytes(64).toString('hex'))

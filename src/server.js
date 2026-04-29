@@ -170,3 +170,14 @@ app.use((req, res) => {
   res.status(404).json({ message: "Route not found" });
 });
 
+// Add this near the top with your other requires
+require("./cronJob");  // ← add this line
+// Add this health route before your other routes
+app.get("/health", (req, res) => {
+  res.status(200).json({
+    status: "ok",
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+  });
+});
+

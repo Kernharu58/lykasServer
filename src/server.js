@@ -11,7 +11,6 @@ const rateLimit = require("express-rate-limit");
 const Message = require("./models/Message");
 const User = require("./models/User");
 
-const ADMIN_ROLES = ["admin", "staff", "super_admin"];
 
 dotenv.config();
 
@@ -243,61 +242,3 @@ connectDB()
     console.error(`Error connecting to MongoDB: ${error.message}`);
     process.exit(1);
   });
-
-  async function fixSenders() {
-  await mongoose.connect(process.env.MONGO_URI);
-  console.log("Connected to MongoDB");
- 
-  // Load all users so we can look up their role by _id
-  const allUsers = await User.find({}).select("_id role").lean();
-  const userRoleMap = {};
-  for (const u of allUsers) {
-    userRoleMap[u._id.toString()] = u.role;
-  }
- 
-  // Load ALL messages
-  const messages = await Message.find({}).lean();
-  console.log(`Found ${messages.length} total messages`);
- 
-  let fixed = 0;
-  let alreadyCorrect = 0;
-  let skipped = 0;
- 
-  for (const msg of messages) {
-    const userIdStr = msg.userId?.toString();
-    const role = userRoleMap[userIdStr];
- 
-    if (!role) {
-      console.warn(`  SKIP: No user found for userId=${userIdStr} (msgId=${msg._id})`);
-      skipped++;
-      continue;
-    }
- 
-    // Correct sender: if the userId belongs to a regular user → "user"
-    //                 if the userId belongs to admin/staff → "shelter"
-    const correctSender = ADMIN_ROLES.includes(role) ? "shelter" : "user";
- 
-    if (msg.sender === correctSender) {
-      alreadyCorrect++;
-      continue;
-    }
- 
-    // Fix it
-    await Message.updateOne({ _id: msg._id }, { $set: { sender: correctSender } });
-    console.log(`  FIXED msg ${msg._id}: "${msg.sender}" → "${correctSender}" (userId=${userIdStr}, role=${role})`);
-    fixed++;
-  }
- 
-  console.log("\n=== Migration complete ===");
-  console.log(`  Fixed:           ${fixed}`);
-  console.log(`  Already correct: ${alreadyCorrect}`);
-  console.log(`  Skipped:         ${skipped}`);
- 
-  await mongoose.disconnect();
-  console.log("Disconnected.");
-}
- 
-fixSenders().catch((err) => {
-  console.error("Migration failed:", err);
-  process.exit(1);
-});

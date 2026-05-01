@@ -167,11 +167,19 @@ io.use(async (socket, next) => {
 io.on("connection", (socket) => {
   console.log("User connected:", socket.id);
 
+  const isAdminUser = () => ["admin", "staff", "super_admin"].includes(socket.user.role);
+
+  // Auto-join the user's own private room on connect (fixes mobile not receiving messages)
+  if (!isAdminUser()) {
+    const ownRoom = socket.user._id.toString();
+    socket.join(ownRoom);
+    console.log(`User auto-joined their room: ${ownRoom}`);
+  }
+
   socket.on("joinRoom", (userId) => {
-    const isAdmin = ["admin", "staff", "super_admin"].includes(socket.user.role);
     const isOwnRoom = socket.user._id.toString() === userId;
 
-    if (!isAdmin && !isOwnRoom) {
+    if (!isAdminUser() && !isOwnRoom) {
       return;
     }
 
@@ -180,7 +188,7 @@ io.on("connection", (socket) => {
   });
 
   socket.on("joinAdmin", () => {
-    if (!["admin", "staff", "super_admin"].includes(socket.user.role)) {
+    if (!isAdminUser()) {
       return;
     }
 
@@ -190,19 +198,26 @@ io.on("connection", (socket) => {
 
   socket.on("sendMessage", async (data) => {
     try {
-      const isAdmin = ["admin", "staff", "super_admin"].includes(socket.user.role);
+      const isAdmin = isAdminUser();
       const isOwnConversation = socket.user._id.toString() === data.userId;
 
       if (!isAdmin && !isOwnConversation) {
         return;
       }
 
+      // sender is always derived server-side — never trust the client's sender field
+      const sender = isAdmin ? "shelter" : "user";
+
       const savedMessage = await Message.create({
         userId: data.userId,
         text: data.text,
-        sender: isAdmin ? "shelter" : "user",
+        sender,
         image: data.image || "",
       });
+
+      // Emit to the user's private room (mobile receives this)
+      // and to admin_room (all admin tabs receive this)
+      // The sender's own socket also gets it so both sides stay in sync
       io.to(data.userId).to("admin_room").emit("receiveMessage", savedMessage);
     } catch (error) {
       console.error("Error saving message:", error);

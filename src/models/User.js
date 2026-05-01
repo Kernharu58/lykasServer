@@ -32,6 +32,14 @@ const userSchema = new mongoose.Schema(
       type: Date, 
       default: null 
     },
+    profilePicture: {
+      type: String,
+      default: "",
+    },
+    notificationsEnabled: {
+      type: Boolean,
+      default: false,
+    },
     favorites: [
       {
         type: mongoose.Schema.Types.ObjectId,

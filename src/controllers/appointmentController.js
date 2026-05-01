@@ -1,11 +1,27 @@
 const Appointment = require("../models/Appointment");
+const AuditLog = require("../models/AuditLog");
+
+const createAuditLog = async ({ actor, action, targetUser, metadata }) => {
+  try {
+    if (!actor) return;
+    await AuditLog.create({ actor, action, targetUser, metadata });
+  } catch (error) {
+    console.error("Audit log failed:", error.message);
+  }
+};
 
 const getAppointments = async (req, res) => {
   try {
-    // 👉 FIX: Added .populate() to pull in the user's actual name, email, and picture!
-    const appointments = await Appointment.find()
-      .populate("enrolledUsers.user", "displayName email profilePicture")
-      .sort({ date: 1 });
+    const isAdmin = ["admin", "staff", "super_admin"].includes(req.user.role);
+    const query = Appointment.find().sort({ date: 1 });
+
+    if (isAdmin) {
+      query.populate("enrolledUsers.user", "displayName email profilePicture");
+    } else {
+      query.select("-enrolledUsers");
+    }
+
+    const appointments = await query;
       
     res.status(200).json(appointments);
   } catch (error) {
@@ -16,6 +32,18 @@ const getAppointments = async (req, res) => {
 const createAppointment = async (req, res) => {
   try {
     const appointment = await Appointment.create(req.body);
+
+    await createAuditLog({
+      actor: req.user?._id,
+      action: "SHIFT_CREATE",
+      metadata: {
+        appointmentId: appointment._id,
+        title: appointment.title,
+        date: appointment.date,
+        capacity: appointment.capacity,
+      },
+    });
+
     res.status(201).json(appointment);
   } catch (error) {
     res.status(400).json({ message: error.message });
@@ -26,39 +54,62 @@ const enrollInAppointment = async (req, res) => {
   try {
     const appointment = await Appointment.findById(req.params.id);
     if (!appointment) return res.status(404).json({ message: "Not found" });
+    if (appointment.status !== "Open") {
+      return res.status(400).json({ message: "Shift is not open for enrollment" });
+    }
 
     // 1. Grab the form data sent from your React Native screen
     const { phone, emergencyContact, notes } = req.body;
 
-    // 2. Check if user is already enrolled (checking the nested .user field)
-    const isEnrolled = appointment.enrolledUsers.some(
-      (entry) => entry.user.toString() === req.user._id.toString(),
-    );
-
-    if (isEnrolled) {
-      return res.status(400).json({ message: "Already signed up" });
-    }
-
-    if (appointment.enrolledUsers.length >= appointment.capacity) {
-      appointment.status = "Full";
-      await appointment.save();
-      return res.status(400).json({ message: "Shift is full" });
-    }
-
-    // 3. Push the entire application object to the database!
-    appointment.enrolledUsers.push({
-      user: req.user._id,
-      phone,
-      emergencyContact,
-      notes,
+    const shiftStart = new Date(appointment.date);
+    const shiftEnd = new Date(shiftStart.getTime() + appointment.durationHours * 60 * 60 * 1000);
+    const userAppointments = await Appointment.find({
+      "enrolledUsers.user": req.user._id,
+      status: { $ne: "Completed" },
     });
 
-    if (appointment.enrolledUsers.length === appointment.capacity) {
-      appointment.status = "Full";
+    const hasOverlap = userAppointments.some((existingAppointment) => {
+      const existingStart = new Date(existingAppointment.date);
+      const existingEnd = new Date(
+        existingStart.getTime() + existingAppointment.durationHours * 60 * 60 * 1000,
+      );
+      return existingStart < shiftEnd && existingEnd > shiftStart;
+    });
+
+    if (hasOverlap) {
+      return res.status(400).json({ message: "You already have a shift during this time" });
     }
 
-    await appointment.save();
-    res.status(200).json({ message: "Successfully enrolled!", appointment });
+    const updatedAppointment = await Appointment.findOneAndUpdate(
+      {
+        _id: req.params.id,
+        status: "Open",
+        "enrolledUsers.user": { $ne: req.user._id },
+        $expr: { $lt: [{ $size: "$enrolledUsers" }, "$capacity"] },
+      },
+      {
+        $push: {
+          enrolledUsers: {
+            user: req.user._id,
+            phone,
+            emergencyContact,
+            notes,
+          },
+        },
+      },
+      { new: true },
+    );
+
+    if (!updatedAppointment) {
+      return res.status(400).json({ message: "Shift is full or you are already signed up" });
+    }
+
+    if (updatedAppointment.enrolledUsers.length >= updatedAppointment.capacity) {
+      updatedAppointment.status = "Full";
+      await updatedAppointment.save();
+    }
+
+    res.status(200).json({ message: "Successfully enrolled!", appointment: updatedAppointment });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -127,6 +178,17 @@ const deleteAppointment = async (req, res) => {
   try {
     const appointment = await Appointment.findByIdAndDelete(req.params.id);
     if (!appointment) return res.status(404).json({ message: "Shift not found" });
+
+    await createAuditLog({
+      actor: req.user?._id,
+      action: "SHIFT_DELETE",
+      metadata: {
+        appointmentId: appointment._id,
+        title: appointment.title,
+        date: appointment.date,
+        enrolledCount: appointment.enrolledUsers.length,
+      },
+    });
     
     res.status(200).json({ message: "Shift successfully deleted." });
   } catch (error) {
@@ -137,12 +199,25 @@ const deleteAppointment = async (req, res) => {
 // 👉 NEW: Update an existing shift
 const updateAppointment = async (req, res) => {
   try {
-    const appointment = await Appointment.findByIdAndUpdate(
-      req.params.id,
-      req.body,
-      { new: true, runValidators: true } // Return the updated document
-    );
-    if (!appointment) return res.status(404).json({ message: "Shift not found" });
+    const existingAppointment = await Appointment.findById(req.params.id);
+    if (!existingAppointment) return res.status(404).json({ message: "Shift not found" });
+
+    const previousStatus = existingAppointment.status;
+    Object.assign(existingAppointment, req.body);
+    const appointment = await existingAppointment.save();
+
+    await createAuditLog({
+      actor: req.user?._id,
+      action: "SHIFT_UPDATE",
+      metadata: {
+        appointmentId: appointment._id,
+        title: appointment.title,
+        previousStatus,
+        newStatus: appointment.status,
+        date: appointment.date,
+        capacity: appointment.capacity,
+      },
+    });
     
     res.status(200).json(appointment);
   } catch (error) {

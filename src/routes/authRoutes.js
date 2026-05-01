@@ -11,12 +11,18 @@ const {
   googleLogin,
   getAllUsers,
   updateUserRole,
+  updateUserStatus,
+  impersonateUser,
+  getAuditLogs,
   deleteUser
 } = require("../controllers/authController");
 
 // Middleware to protect routes and handle file uploads
-const { protect } = require("../middleware/authMiddleware");
+const { protect, restrictTo } = require("../middleware/authMiddleware");
 const { upload } = require("../config/cloudinary");
+
+const adminOnly = [protect, restrictTo("admin", "staff", "super_admin")];
+const superAdminOnly = [protect, restrictTo("super_admin")];
 
 // @desc    Register a new user
 router.post("/register", registerUser);
@@ -43,8 +49,11 @@ router.get("/favorites", protect, getFavorites);
 router.post("/google", googleLogin);
 
 // 👉 NEW: Admin User Management Routes
-router.get("/users", getAllUsers);
-router.put("/users/:id/role", updateUserRole);
-router.delete("/users/:id", deleteUser);
+router.get("/users", adminOnly, getAllUsers);
+router.put("/users/:id/role", adminOnly, updateUserRole);
+router.put("/users/:id/status", adminOnly, updateUserStatus);
+router.post("/users/:id/impersonate", superAdminOnly, impersonateUser);
+router.delete("/users/:id", adminOnly, deleteUser);
+router.get("/audit-logs", superAdminOnly, getAuditLogs);
 
 module.exports = router;

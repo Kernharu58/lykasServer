@@ -23,6 +23,11 @@ const storage = new CloudinaryStorage({
 });
 
 // 3. Create the upload middleware
-const upload = multer({ storage: storage });
+const upload = multer({
+  storage: storage,
+  limits: {
+    fileSize: Number(process.env.MAX_FILE_SIZE || 5 * 1024 * 1024),
+  },
+});
 
 module.exports = { upload, cloudinary };

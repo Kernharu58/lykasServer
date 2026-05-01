@@ -1,6 +1,17 @@
 const User = require("../models/User");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
+const AuditLog = require("../models/AuditLog");
+const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || "7d";
+
+const createAuditLog = async ({ actor, action, targetUser, metadata }) => {
+  try {
+    if (!actor) return;
+    await AuditLog.create({ actor, action, targetUser, metadata });
+  } catch (error) {
+    console.error("Audit log failed:", error.message);
+  }
+};
 
 // @desc    Register a new user
 // @route   POST /api/auth/register
@@ -37,7 +48,7 @@ const registerUser = async (req, res) => {
 
     // 4. Generate a JWT Token
     const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, {
-      expiresIn: "7d",
+      expiresIn: JWT_EXPIRES_IN,
     });
 
     res.status(201).json({
@@ -75,7 +86,7 @@ const loginUser = async (req, res) => {
 
     // 3. Generate a JWT Token
     const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, {
-      expiresIn: "7d",
+      expiresIn: JWT_EXPIRES_IN,
     });
 
     res.status(200).json({
@@ -176,7 +187,7 @@ const uploadProfilePicture = async (req, res) => {
 // @route   PUT /api/auth/profile
 const updateProfile = async (req, res) => {
   try {
-    const { displayName } = req.body;
+    const { displayName, notificationsEnabled } = req.body;
 
     const user = await User.findById(req.user._id);
     if (!user) {
@@ -184,6 +195,9 @@ const updateProfile = async (req, res) => {
     }
 
     user.displayName = displayName || user.displayName;
+    if (typeof notificationsEnabled === "boolean") {
+      user.notificationsEnabled = notificationsEnabled;
+    }
     const updatedUser = await user.save();
 
     res.status(200).json({
@@ -193,6 +207,7 @@ const updateProfile = async (req, res) => {
         displayName: updatedUser.displayName,
         email: updatedUser.email,
         profilePicture: updatedUser.profilePicture,
+        notificationsEnabled: updatedUser.notificationsEnabled,
       }
     });
   } catch (error) {
@@ -223,14 +238,97 @@ const getAllUsers = async (req, res) => {
 const updateUserRole = async (req, res) => {
   try {
     const { role } = req.body;
-    const user = await User.findByIdAndUpdate(
-      req.params.id, 
-      { role }, 
-      { new: true }
-    ).select("-password");
+    const existingUser = await User.findById(req.params.id).select("-password");
 
-    if (!user) return res.status(404).json({ message: "User not found" });
+    if (!existingUser) return res.status(404).json({ message: "User not found" });
+
+    const previousRole = existingUser.role;
+    existingUser.role = role;
+    const user = await existingUser.save();
+
+    await createAuditLog({
+      actor: req.user?._id,
+      action: "ROLE_CHANGE",
+      targetUser: user._id,
+      metadata: { previousRole, newRole: role },
+    });
+
     res.status(200).json(user);
+  } catch (error) {
+    res.status(500).json({ message: "Server error", error: error.message });
+  }
+};
+
+// @desc    Update a user's account status
+// @route   PUT /api/auth/users/:id/status
+const updateUserStatus = async (req, res) => {
+  try {
+    const { status, lockedUntil } = req.body;
+    const allowedStatuses = ["active", "suspended", "locked"];
+
+    if (!allowedStatuses.includes(status)) {
+      return res.status(400).json({ message: "Invalid account status" });
+    }
+
+    const user = await User.findById(req.params.id).select("-password");
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    const previousStatus = user.status;
+    user.status = status;
+    user.lockedUntil = status === "locked" && lockedUntil ? new Date(lockedUntil) : null;
+
+    await user.save();
+
+    await createAuditLog({
+      actor: req.user?._id,
+      action: "STATUS_CHANGE",
+      targetUser: user._id,
+      metadata: { previousStatus, newStatus: status, lockedUntil: user.lockedUntil },
+    });
+
+    res.status(200).json(user);
+  } catch (error) {
+    res.status(500).json({ message: "Server error", error: error.message });
+  }
+};
+
+// @desc    Generate a short-lived token to impersonate a user
+// @route   POST /api/auth/users/:id/impersonate
+const impersonateUser = async (req, res) => {
+  try {
+    const user = await User.findById(req.params.id).select("-password");
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    const token = jwt.sign(
+      { id: user._id, impersonatedBy: req.user._id },
+      process.env.JWT_SECRET,
+      { expiresIn: "1h" },
+    );
+
+    await createAuditLog({
+      actor: req.user?._id,
+      action: "IMPERSONATE",
+      targetUser: user._id,
+      metadata: { targetEmail: user.email },
+    });
+
+    res.status(200).json({ token, user });
+  } catch (error) {
+    res.status(500).json({ message: "Server error", error: error.message });
+  }
+};
+
+// @desc    Fetch audit logs for privileged review
+// @route   GET /api/auth/audit-logs
+const getAuditLogs = async (_req, res) => {
+  try {
+    const logs = await AuditLog.find({})
+      .populate("actor", "displayName email role")
+      .populate("targetUser", "displayName email role")
+      .sort({ createdAt: -1 })
+      .limit(250);
+
+    res.status(200).json(logs);
   } catch (error) {
     res.status(500).json({ message: "Server error", error: error.message });
   }
@@ -242,6 +340,14 @@ const deleteUser = async (req, res) => {
   try {
     const user = await User.findByIdAndDelete(req.params.id);
     if (!user) return res.status(404).json({ message: "User not found" });
+
+    await createAuditLog({
+      actor: req.user?._id,
+      action: "USER_DELETE",
+      targetUser: user._id,
+      metadata: { email: user.email, role: user.role, status: user.status },
+    });
+
     res.status(200).json({ message: "User deleted successfully" });
   } catch (error) {
     res.status(500).json({ message: "Server error", error: error.message });
@@ -288,7 +394,7 @@ const googleLogin = async (req, res) => {
 
     // FIX 3: Replaced undefined `generateToken` with direct JWT signing
     const jwtToken = jwt.sign({ id: user._id }, process.env.JWT_SECRET, {
-      expiresIn: "7d",
+      expiresIn: JWT_EXPIRES_IN,
     });
 
     res.status(200).json({
@@ -312,6 +418,6 @@ const googleLogin = async (req, res) => {
 module.exports = { 
   registerUser, loginUser, toggleFavorite, getFavorites, getMe, 
   uploadProfilePicture, updateProfile, googleLogin,
-  getAllUsers, updateUserRole, deleteUser // <--- ADDED THESE THREE
+  getAllUsers, updateUserRole, updateUserStatus, impersonateUser, getAuditLogs, deleteUser
 };
 

@@ -21,6 +21,12 @@ dotenv.config();
 // Initialize the Express application
 const app = express();
 
+const server = http.createServer(app);
+
+server.listen(PORT, "0.0.0.0", () => {
+  console.log(`Server running on port ${PORT}`);
+});
+
 app.set('trust proxy', 1);
 
 // --- Middleware ---

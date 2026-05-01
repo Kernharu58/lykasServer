@@ -197,17 +197,18 @@ io.on("connection", (socket) => {
     console.log("Admin joined the master admin_room");
   });
 
-  socket.on("sendMessage", async (data) => {
-    try {
-      const isAdmin = isAdminUser();
-      const isOwnConversation = socket.user._id.toString() === data.userId;
+socket.on("sendMessage", async (data) => {
+  try {
+    const isAdmin = isAdminUser();
+    const isOwnConversation = socket.user._id.toString() === data.userId;
 
-      if (!isAdmin && !isOwnConversation) {
-        return;
-      }
+    if (!isAdmin && !isOwnConversation) {
+      return;
+    }
 
-      // sender is always derived server-side — never trust the client's sender field
-      const sender = isAdmin ? "shelter" : "user";
+    // If user is sending for their own account, always record as "user"
+    // Only admin sending on behalf of others gets "shelter"
+    const sender = isOwnConversation ? "user" : "shelter";
 
       const savedMessage = await Message.create({
         userId: data.userId,

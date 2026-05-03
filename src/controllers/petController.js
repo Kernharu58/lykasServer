@@ -49,13 +49,21 @@ const getPets = async (req, res) => {
 // @desc    Fetch a single pet by ID
 const getPetById = async (req, res) => {
   try {
-    const pet = await Pet.findById(req.params.id);
+    const { id } = req.params;
+    
+    // Validate MongoDB ObjectId format
+    if (!id.match(/^[0-9a-fA-F]{24}$/)) {
+      return res.status(400).json({ message: "Invalid pet ID format" });
+    }
+    
+    const pet = await Pet.findById(id);
     if (pet) {
       res.status(200).json(pet);
     } else {
       res.status(404).json({ message: "Pet not found" });
     }
   } catch (error) {
+    console.error("Error fetching pet by ID:", error);
     res.status(500).json({ message: "Server Error", error: error.message });
   }
 };

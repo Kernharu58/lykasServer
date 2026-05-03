@@ -26,7 +26,13 @@ const createAuditLog = async ({ actor, action, targetUser, metadata }) => {
 // @route   POST /api/auth/signup
 const signup = async (req, res) => {
   try {
-    const { name, email, password } = req.body;
+    // Accept both 'name' and 'displayName' for flexibility
+    const { name, displayName, email, password } = req.body;
+    const userName = name || displayName;
+
+    if (!userName || !email || !password) {
+      return res.status(400).json({ message: 'Name, email, and password are required' });
+    }
 
     // 1. Check if user already exists
     const existingUser = await User.findOne({ email });
@@ -43,7 +49,7 @@ const signup = async (req, res) => {
 
     // 3. Create and save the new user
     const newUser = new User({
-      name, 
+      name: userName, 
       email,
       password: hashedPassword, // Applied the hashed password here
       verificationToken: token,

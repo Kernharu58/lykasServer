@@ -18,11 +18,13 @@ const {
   updateUserStatus,
   impersonateUser,
   getAuditLogs,
-  deleteUser
+  deleteUser,
+  adminResetAnyPassword // 👉 Added from your snippet
 } = require("../controllers/authController");
 
 // Middleware to protect routes and handle file uploads
-const { protect, restrictTo } = require("../middleware/authMiddleware");
+// 👉 Added adminAuth to the destructuring list
+const { protect, restrictTo, adminAuth } = require("../middleware/authMiddleware"); 
 const { upload } = require("../config/cloudinary");
 const { loginLimiter, registerLimiter, passwordResetLimiter } = require("../middleware/rateLimitMiddleware");
 
@@ -72,5 +74,9 @@ router.put("/users/:id/status", adminOnly, updateUserStatus);
 router.post("/users/:id/impersonate", superAdminOnly, impersonateUser);
 router.delete("/users/:id", adminOnly, deleteUser);
 router.get("/audit-logs", superAdminOnly, getAuditLogs);
+
+// 👉 NEW: Force password reset
+// The ':id' can be a mobile user ID OR a staff member ID
+router.post("/admin/force-reset/:id", protect, adminAuth, adminResetAnyPassword);
 
 module.exports = router;

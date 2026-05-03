@@ -1,21 +1,19 @@
-const nodemailer = require("nodemailer");
+const nodemailer = require('nodemailer');
 
-// Configure email transporter
+// 1. Configure the transporter
+// Using general environment variables to allow for flexibility between Gmail, SendGrid, or custom SMTP
 const transporter = nodemailer.createTransport({
-  service: process.env.EMAIL_SERVICE || "gmail",
+  host: process.env.EMAIL_HOST,
+  port: process.env.EMAIL_PORT,
+  service: process.env.EMAIL_SERVICE, // e.g., 'gmail'
   auth: {
-    user: process.env.EMAIL_USER,
+    user: process.env.EMAIL_USER || process.env.EMAIL_USERNAME,
     pass: process.env.EMAIL_PASSWORD,
   },
 });
 
 /**
  * Send email with verification link
- * @param {Object} options - Email options
- * @param {string} options.email - Recipient email
- * @param {string} options.displayName - User display name
- * @param {string} options.verificationToken - Verification token
- * @param {string} options.frontendUrl - Frontend URL (e.g., 'http://localhost:3000')
  */
 const sendVerificationEmail = async ({
   email,
@@ -27,7 +25,7 @@ const sendVerificationEmail = async ({
     const verificationLink = `${frontendUrl}/verify-email?token=${verificationToken}`;
     
     const mailOptions = {
-      from: process.env.EMAIL_USER,
+      from: `Lykas Admin <${process.env.EMAIL_USER}>`,
       to: email,
       subject: "Verify Your Lykas Account Email",
       html: `
@@ -59,11 +57,6 @@ const sendVerificationEmail = async ({
 
 /**
  * Send password reset email
- * @param {Object} options - Email options
- * @param {string} options.email - Recipient email
- * @param {string} options.displayName - User display name
- * @param {string} options.resetToken - Reset token
- * @param {string} options.frontendUrl - Frontend URL
  */
 const sendPasswordResetEmail = async ({
   email,
@@ -75,7 +68,7 @@ const sendPasswordResetEmail = async ({
     const resetLink = `${frontendUrl}/reset-password?token=${resetToken}`;
     
     const mailOptions = {
-      from: process.env.EMAIL_USER,
+      from: `Lykas Admin <${process.env.EMAIL_USER}>`,
       to: email,
       subject: "Reset Your Lykas Account Password",
       html: `

@@ -4,11 +4,14 @@ const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
 const AuditLog = require("../models/AuditLog");
 const TokenBlacklist = require("../models/TokenBlacklist");
-const { sendVerificationEmail, sendPasswordResetEmail } = require("../utils/emailService");
+const { sendVerificationEmail, sendPasswordResetEmail, sendEmail } = require("../utils/emailService");
+const { OAuth2Client } = require("google-auth-library");
 
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || "7d";
 const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:3000";
 const MOBILE_APP_URL = process.env.MOBILE_APP_URL || "lykas://";
+
+const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
 const createAuditLog = async ({ actor, action, targetUser, metadata }) => {
   try {
@@ -19,72 +22,57 @@ const createAuditLog = async ({ actor, action, targetUser, metadata }) => {
   }
 };
 
-// @desc    Register a new user
-// @route   POST /api/auth/register
-const registerUser = async (req, res) => {
+// @desc    Register a new user (Applied your signup logic)
+// @route   POST /api/auth/signup
+const signup = async (req, res) => {
   try {
-    const { displayName, email, password } = req.body;
-
-    // Backend Password Security Check
-    const strongPasswordRegex =
-      /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{8,}$/;
-    if (!strongPasswordRegex.test(password)) {
-      return res.status(400).json({
-        message:
-          "Password must be at least 8 characters and contain uppercase, lowercase, numbers, and symbols.",
-      });
-    }
+    const { name, email, password } = req.body;
 
     // 1. Check if user already exists
-    const userExists = await User.findOne({ email });
-    if (userExists) {
-      return res.status(400).json({ message: "User already exists" });
+    const existingUser = await User.findOne({ email });
+    if (existingUser) {
+      return res.status(400).json({ message: 'User already exists' });
     }
 
-    // 2. Hash the password
+    // 2. Generate a random verification token
+    const token = crypto.randomBytes(32).toString('hex'); 
+
+    // 👉 APPLIED FIX: Hash the password using bcrypt before saving
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
 
-    // 3. Generate email verification token
-    const emailVerificationToken = crypto.randomBytes(32).toString("hex");
-    const emailVerificationExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
-
-    // 4. Create the user in the database
-    const user = await User.create({
-      displayName,
+    // 3. Create and save the new user
+    const newUser = new User({
+      name, 
       email,
-      password: hashedPassword,
-      emailVerificationToken,
-      emailVerificationExpires,
-      emailVerified: false,
+      password: hashedPassword, // Applied the hashed password here
+      verificationToken: token,
+      isVerified: false 
+    });
+    
+    await newUser.save();
+
+    // 4. Send the verification email
+    const emailResult = await sendVerificationEmail({
+      email: newUser.email,
+      displayName: newUser.name,
+      verificationToken: token,
+      frontendUrl: process.env.FRONTEND_URL || 'http://localhost:3000' 
     });
 
-    // 5. Send verification email
-    await sendVerificationEmail({
-      email: user.email,
-      displayName: user.displayName,
-      verificationToken: emailVerificationToken,
-      frontendUrl: FRONTEND_URL,
+    // 5. Handle email failure gracefully
+    if (!emailResult.success) {
+      return res.status(500).json({ message: 'User registered, but failed to send verification email.' });
+    }
+
+    // 6. Success response
+    res.status(201).json({ 
+      message: 'Signup successful! Please check your email to verify your account.' 
     });
 
-    // 6. Generate a JWT Token (user can login but email is unverified)
-    const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, {
-      expiresIn: JWT_EXPIRES_IN,
-    });
-
-    res.status(201).json({
-      message: "User registered successfully. Please check your email to verify your account.",
-      token,
-      user: {
-        id: user._id,
-        displayName: user.displayName,
-        email: user.email,
-        role: user.role,
-        emailVerified: user.emailVerified,
-      },
-    });
   } catch (error) {
-    res.status(500).json({ message: "Server error", error: error.message });
+    console.error('Signup error:', error);
+    res.status(500).json({ message: 'Server error during signup' });
   }
 };
 
@@ -133,10 +121,10 @@ const loginUser = async (req, res) => {
       token,
       user: {
         id: user._id,
-        displayName: user.displayName,
+        displayName: user.displayName || user.name, // Fallback for schema difference
         email: user.email,
         role: user.role,
-        emailVerified: user.emailVerified,
+        emailVerified: user.emailVerified || user.isVerified, // Fallback for schema difference
       },
     });
   } catch (error) {
@@ -154,18 +142,23 @@ const verifyEmail = async (req, res) => {
       return res.status(400).json({ message: "Verification token is required" });
     }
 
+    // Note: Adjusted to look for both possible token fields based on the merge
     const user = await User.findOne({
-      emailVerificationToken: token,
-      emailVerificationExpires: { $gt: Date.now() },
+      $or: [
+        { emailVerificationToken: token, emailVerificationExpires: { $gt: Date.now() } },
+        { verificationToken: token }
+      ]
     });
 
     if (!user) {
       return res.status(400).json({ message: "Invalid or expired verification token" });
     }
 
-    // Mark email as verified
+    // Mark email as verified (handling both schema variations)
     user.emailVerified = true;
+    user.isVerified = true;
     user.emailVerificationToken = null;
+    user.verificationToken = null;
     user.emailVerificationExpires = null;
     await user.save();
 
@@ -180,9 +173,9 @@ const verifyEmail = async (req, res) => {
       message: "Email verified successfully",
       user: {
         id: user._id,
-        displayName: user.displayName,
+        displayName: user.displayName || user.name,
         email: user.email,
-        emailVerified: user.emailVerified,
+        emailVerified: user.emailVerified || user.isVerified,
       },
     });
   } catch (error) {
@@ -219,7 +212,7 @@ const forgotPassword = async (req, res) => {
     // Send password reset email
     await sendPasswordResetEmail({
       email: user.email,
-      displayName: user.displayName,
+      displayName: user.displayName || user.name,
       resetToken,
       frontendUrl: FRONTEND_URL,
     });
@@ -433,7 +426,7 @@ const updateProfile = async (req, res) => {
       message: "Profile updated successfully",
       user: {
         id: updatedUser._id,
-        displayName: updatedUser.displayName,
+        displayName: updatedUser.displayName || updatedUser.name,
         email: updatedUser.email,
         profilePicture: updatedUser.profilePicture,
         notificationsEnabled: updatedUser.notificationsEnabled,
@@ -443,13 +436,6 @@ const updateProfile = async (req, res) => {
     res.status(500).json({ message: "Server error", error: error.message });
   }
 };
-
-
-// @desc    Login or Register via Google
-// @route   POST /api/auth/google
-// 👉 REPLACED: Highly detailed debug version of Google Login
-
-// ... keep all your existing authController code ...
 
 // 👉 NEW: Get all users for the Admin Dashboard
 // @route   GET /api/auth/users
@@ -552,8 +538,8 @@ const impersonateUser = async (req, res) => {
 const getAuditLogs = async (_req, res) => {
   try {
     const logs = await AuditLog.find({})
-      .populate("actor", "displayName email role")
-      .populate("targetUser", "displayName email role")
+      .populate("actor", "displayName name email role")
+      .populate("targetUser", "displayName name email role")
       .sort({ createdAt: -1 })
       .limit(250);
 
@@ -583,12 +569,42 @@ const deleteUser = async (req, res) => {
   }
 };
 
+// 👉 NEW: Master Password Reset function for Admins
+// @route   POST /api/auth/users/:id/reset-password
+const adminResetAnyPassword = async (req, res) => {
+  try {
+    const targetUserId = req.params.id;
+    const targetUser = await User.findById(targetUserId);
 
-// Replace the googleLogin function in src/controllers/authController.js:
+    if (!targetUser) {
+      return res.status(404).json({ message: 'User or account not found' });
+    }
 
-const { OAuth2Client } = require("google-auth-library");
-const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
+    // 1. Generate a secure reset token
+    const resetToken = targetUser.getResetPasswordToken(); 
+    await targetUser.save({ validateBeforeSave: false });
 
+    // 2. Create the reset URL (pointing to the mobile app or admin panel based on user role)
+    const resetUrl = `${process.env.FRONTEND_URL}/reset-password/${resetToken}`;
+
+    // 3. Send the email via your emailService.js
+    const message = `You or an administrator requested a password reset. Please make a PUT request to: \n\n ${resetUrl}`;
+    await sendEmail({
+      email: targetUser.email,
+      subject: 'Password Reset Request',
+      message
+    });
+
+    res.status(200).json({ success: true, data: 'Reset email sent to the user.' });
+
+  } catch (error) {
+    console.error("Admin Reset Error:", error);
+    res.status(500).json({ message: 'Failed to process password reset.' });
+  }
+};
+
+// @desc    Login or Register via Google
+// @route   POST /api/auth/google
 const googleLogin = async (req, res) => {
   console.log("\n========== 🚀 GOOGLE AUTH DEBUG START ==========");
   const { idToken } = req.body;
@@ -598,15 +614,13 @@ const googleLogin = async (req, res) => {
   }
 
   try {
-    // FIX 1: Use 'client' instead of 'googleClient'
-    // FIX 2: Include ALL Client IDs in the audience array to prevent mismatch
     const ticket = await client.verifyIdToken({
       idToken,
       audience: [
         process.env.GOOGLE_CLIENT_ID,
         process.env.ANDROID_CLIENT_ID,
         process.env.IOS_CLIENT_ID
-      ].filter(Boolean) // Filters out any undefined env vars
+      ].filter(Boolean) 
     });
     
     const payload = ticket.getPayload();
@@ -614,14 +628,14 @@ const googleLogin = async (req, res) => {
     
     if (!user) {
       user = await User.create({
-        displayName: payload.name,
+        name: payload.name, // Matched to your signup schema 
+        displayName: payload.name, 
         email: payload.email,
         password: Math.random().toString(36).slice(-10) + "A1!", 
         role: "user"
       });
     }
 
-    // FIX 3: Replaced undefined `generateToken` with direct JWT signing
     const jwtToken = jwt.sign({ id: user._id }, process.env.JWT_SECRET, {
       expiresIn: JWT_EXPIRES_IN,
     });
@@ -630,7 +644,7 @@ const googleLogin = async (req, res) => {
       token: jwtToken,
       user: {
         _id: user._id,
-        displayName: user.displayName,
+        displayName: user.displayName || user.name,
         email: user.email,
         role: user.role,
         profilePicture: user.profilePicture
@@ -643,9 +657,8 @@ const googleLogin = async (req, res) => {
   }
 };
 
-// 👉 Make sure to add the new functions to the exports at the bottom!
 module.exports = { 
-  registerUser, 
+  signup, // Renamed from registerUser to match your snippet
   loginUser, 
   verifyEmail,
   forgotPassword,
@@ -662,6 +675,6 @@ module.exports = {
   updateUserStatus, 
   impersonateUser, 
   getAuditLogs, 
-  deleteUser
+  deleteUser,
+  adminResetAnyPassword 
 };
-

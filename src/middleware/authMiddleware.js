@@ -1,12 +1,20 @@
 // C:\Users\Kernharu\Desktop\capstone_mid\lykas\services\src\middleware\authMiddleware.js
 const jwt = require("jsonwebtoken");
 const User = require("../models/User");
+const TokenBlacklist = require("../models/TokenBlacklist");
 
 const protect = async (req, res, next) => {
   let token;
   if (req.headers.authorization && req.headers.authorization.startsWith("Bearer")) {
     try {
       token = req.headers.authorization.split(" ")[1];
+
+      // Check if token is blacklisted
+      const blacklistedToken = await TokenBlacklist.findOne({ token });
+      if (blacklistedToken) {
+        return res.status(401).json({ message: "Token has been revoked" });
+      }
+
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
       req.user = await User.findById(decoded.id).select("-password");
       

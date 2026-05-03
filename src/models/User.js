@@ -18,6 +18,26 @@ const userSchema = new mongoose.Schema(
       required: [true, "Password is required"], 
       minlength: [8, "Password must be at least 8 characters"] 
     },
+    emailVerified: {
+      type: Boolean,
+      default: false,
+    },
+    emailVerificationToken: {
+      type: String,
+      default: null,
+    },
+    emailVerificationExpires: {
+      type: Date,
+      default: null,
+    },
+    resetPasswordToken: {
+      type: String,
+      default: null,
+    },
+    resetPasswordExpires: {
+      type: Date,
+      default: null,
+    },
     role: { 
       type: String, 
       enum: ["user", "staff", "admin", "super_admin"], 

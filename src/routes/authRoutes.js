@@ -3,11 +3,15 @@ const router = express.Router();
 const {
   registerUser,
   loginUser,
+  verifyEmail,
+  forgotPassword,
+  resetPassword,
+  logoutUser,
   toggleFavorite,
   getFavorites,
   getMe,                  
   uploadProfilePicture,
-  updateProfile, // 👉 ADDED
+  updateProfile,
   googleLogin,
   getAllUsers,
   updateUserRole,
@@ -20,18 +24,28 @@ const {
 // Middleware to protect routes and handle file uploads
 const { protect, restrictTo } = require("../middleware/authMiddleware");
 const { upload } = require("../config/cloudinary");
+const { loginLimiter, registerLimiter, passwordResetLimiter } = require("../middleware/rateLimitMiddleware");
 
 const adminOnly = [protect, restrictTo("admin", "staff", "super_admin")];
 const superAdminOnly = [protect, restrictTo("super_admin")];
 
 // @desc    Register a new user
-router.post("/register", registerUser);
-
-// @desc    Toggle a pet in favorites
-router.post("/favorites/:petId", protect, toggleFavorite);
+router.post("/register", registerLimiter, registerUser);
 
 // @desc    Login user and get token
-router.post("/login", loginUser);
+router.post("/login", loginLimiter, loginUser);
+
+// @desc    Verify email with token (no protection needed)
+router.post("/verify-email", verifyEmail);
+
+// @desc    Request password reset email (no protection needed)
+router.post("/forgot-password", passwordResetLimiter, forgotPassword);
+
+// @desc    Reset password with token (no protection needed)
+router.post("/reset-password", resetPassword);
+
+// @desc    Logout user and blacklist token
+router.post("/logout", protect, logoutUser);
 
 // @desc    Get current logged in user details
 router.get("/me", protect, getMe);
@@ -41,6 +55,9 @@ router.put("/profile", protect, updateProfile);
 
 // @desc    Upload & Update Profile Picture
 router.post("/profile-picture", protect, upload.single("image"), uploadProfilePicture);
+
+// @desc    Toggle a pet in favorites
+router.post("/favorites/:petId", protect, toggleFavorite);
 
 // @desc    Get all pets in the user's favorites list
 router.get("/favorites", protect, getFavorites);

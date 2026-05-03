@@ -1,8 +1,14 @@
 const User = require("../models/User");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
+const crypto = require("crypto");
 const AuditLog = require("../models/AuditLog");
+const TokenBlacklist = require("../models/TokenBlacklist");
+const { sendVerificationEmail, sendPasswordResetEmail } = require("../utils/emailService");
+
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || "7d";
+const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:3000";
+const MOBILE_APP_URL = process.env.MOBILE_APP_URL || "lykas://";
 
 const createAuditLog = async ({ actor, action, targetUser, metadata }) => {
   try {
@@ -39,26 +45,42 @@ const registerUser = async (req, res) => {
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
 
-    // 3. Create the user in the database
+    // 3. Generate email verification token
+    const emailVerificationToken = crypto.randomBytes(32).toString("hex");
+    const emailVerificationExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+
+    // 4. Create the user in the database
     const user = await User.create({
       displayName,
       email,
       password: hashedPassword,
+      emailVerificationToken,
+      emailVerificationExpires,
+      emailVerified: false,
     });
 
-    // 4. Generate a JWT Token
+    // 5. Send verification email
+    await sendVerificationEmail({
+      email: user.email,
+      displayName: user.displayName,
+      verificationToken: emailVerificationToken,
+      frontendUrl: FRONTEND_URL,
+    });
+
+    // 6. Generate a JWT Token (user can login but email is unverified)
     const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, {
       expiresIn: JWT_EXPIRES_IN,
     });
 
     res.status(201).json({
-      message: "User registered successfully",
+      message: "User registered successfully. Please check your email to verify your account.",
       token,
       user: {
         id: user._id,
         displayName: user.displayName,
         email: user.email,
         role: user.role,
+        emailVerified: user.emailVerified,
       },
     });
   } catch (error) {
@@ -78,13 +100,30 @@ const loginUser = async (req, res) => {
       return res.status(404).json({ message: "User not found" });
     }
 
-    // 2. Check if the password matches the hashed password in DB
+    // 2. Check account status
+    if (user.status === "suspended") {
+      return res.status(403).json({ message: "Account is suspended. Please contact support." });
+    }
+    if (user.status === "locked") {
+      if (user.lockedUntil && new Date() < user.lockedUntil) {
+        return res.status(403).json({ message: `Account locked until ${user.lockedUntil}` });
+      } else if (user.lockedUntil && new Date() >= user.lockedUntil) {
+        // Auto-unlock if lock period has expired
+        user.status = "active";
+        user.lockedUntil = null;
+        await user.save();
+      } else {
+        return res.status(403).json({ message: "Account is locked permanently." });
+      }
+    }
+
+    // 3. Check if the password matches the hashed password in DB
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
       return res.status(400).json({ message: "Invalid credentials" });
     }
 
-    // 3. Generate a JWT Token
+    // 4. Generate a JWT Token
     const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, {
       expiresIn: JWT_EXPIRES_IN,
     });
@@ -97,8 +136,198 @@ const loginUser = async (req, res) => {
         displayName: user.displayName,
         email: user.email,
         role: user.role,
+        emailVerified: user.emailVerified,
       },
     });
+  } catch (error) {
+    res.status(500).json({ message: "Server error", error: error.message });
+  }
+};
+
+// @desc    Verify user email with verification token
+// @route   POST /api/auth/verify-email
+const verifyEmail = async (req, res) => {
+  try {
+    const { token } = req.body;
+
+    if (!token) {
+      return res.status(400).json({ message: "Verification token is required" });
+    }
+
+    const user = await User.findOne({
+      emailVerificationToken: token,
+      emailVerificationExpires: { $gt: Date.now() },
+    });
+
+    if (!user) {
+      return res.status(400).json({ message: "Invalid or expired verification token" });
+    }
+
+    // Mark email as verified
+    user.emailVerified = true;
+    user.emailVerificationToken = null;
+    user.emailVerificationExpires = null;
+    await user.save();
+
+    await createAuditLog({
+      actor: user._id,
+      action: "EMAIL_VERIFIED",
+      targetUser: user._id,
+      metadata: { email: user.email },
+    });
+
+    res.status(200).json({
+      message: "Email verified successfully",
+      user: {
+        id: user._id,
+        displayName: user.displayName,
+        email: user.email,
+        emailVerified: user.emailVerified,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ message: "Server error", error: error.message });
+  }
+};
+
+// @desc    Request password reset email
+// @route   POST /api/auth/forgot-password
+const forgotPassword = async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({ message: "Email is required" });
+    }
+
+    const user = await User.findOne({ email });
+    if (!user) {
+      // For security, don't reveal if email exists
+      return res.status(200).json({
+        message: "If an account exists with this email, a password reset link has been sent",
+      });
+    }
+
+    // Generate reset token
+    const resetToken = crypto.randomBytes(32).toString("hex");
+    const resetPasswordExpires = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
+
+    user.resetPasswordToken = resetToken;
+    user.resetPasswordExpires = resetPasswordExpires;
+    await user.save();
+
+    // Send password reset email
+    await sendPasswordResetEmail({
+      email: user.email,
+      displayName: user.displayName,
+      resetToken,
+      frontendUrl: FRONTEND_URL,
+    });
+
+    await createAuditLog({
+      actor: null,
+      action: "PASSWORD_RESET_REQUESTED",
+      targetUser: user._id,
+      metadata: { email: user.email },
+    });
+
+    res.status(200).json({
+      message: "Password reset link sent to your email",
+    });
+  } catch (error) {
+    res.status(500).json({ message: "Server error", error: error.message });
+  }
+};
+
+// @desc    Reset password with token
+// @route   POST /api/auth/reset-password
+const resetPassword = async (req, res) => {
+  try {
+    const { token, newPassword, confirmPassword } = req.body;
+
+    if (!token || !newPassword || !confirmPassword) {
+      return res.status(400).json({ message: "Token and new password are required" });
+    }
+
+    if (newPassword !== confirmPassword) {
+      return res.status(400).json({ message: "Passwords do not match" });
+    }
+
+    // Validate strong password
+    const strongPasswordRegex =
+      /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{8,}$/;
+    if (!strongPasswordRegex.test(newPassword)) {
+      return res.status(400).json({
+        message:
+          "Password must be at least 8 characters and contain uppercase, lowercase, numbers, and symbols.",
+      });
+    }
+
+    const user = await User.findOne({
+      resetPasswordToken: token,
+      resetPasswordExpires: { $gt: Date.now() },
+    });
+
+    if (!user) {
+      return res.status(400).json({ message: "Invalid or expired password reset token" });
+    }
+
+    // Hash new password
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(newPassword, salt);
+
+    user.password = hashedPassword;
+    user.resetPasswordToken = null;
+    user.resetPasswordExpires = null;
+    await user.save();
+
+    // Blacklist all existing tokens for this user
+    await TokenBlacklist.deleteMany({ userId: user._id });
+
+    await createAuditLog({
+      actor: user._id,
+      action: "PASSWORD_RESET",
+      targetUser: user._id,
+      metadata: { email: user.email },
+    });
+
+    res.status(200).json({
+      message: "Password reset successfully. Please login with your new password.",
+    });
+  } catch (error) {
+    res.status(500).json({ message: "Server error", error: error.message });
+  }
+};
+
+// @desc    Logout user and blacklist token
+// @route   POST /api/auth/logout
+const logoutUser = async (req, res) => {
+  try {
+    const token = req.headers.authorization?.split(" ")[1];
+
+    if (!token) {
+      return res.status(400).json({ message: "No token provided" });
+    }
+
+    // Decode token to get expiration
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+
+    // Add token to blacklist
+    await TokenBlacklist.create({
+      token,
+      userId: decoded.id,
+      expiresAt: new Date(decoded.exp * 1000), // Convert unix timestamp to date
+      reason: "logout",
+    });
+
+    await createAuditLog({
+      actor: req.user?._id,
+      action: "LOGOUT",
+      targetUser: req.user?._id,
+      metadata: {},
+    });
+
+    res.status(200).json({ message: "Logged out successfully" });
   } catch (error) {
     res.status(500).json({ message: "Server error", error: error.message });
   }
@@ -416,8 +645,23 @@ const googleLogin = async (req, res) => {
 
 // 👉 Make sure to add the new functions to the exports at the bottom!
 module.exports = { 
-  registerUser, loginUser, toggleFavorite, getFavorites, getMe, 
-  uploadProfilePicture, updateProfile, googleLogin,
-  getAllUsers, updateUserRole, updateUserStatus, impersonateUser, getAuditLogs, deleteUser
+  registerUser, 
+  loginUser, 
+  verifyEmail,
+  forgotPassword,
+  resetPassword,
+  logoutUser,
+  toggleFavorite, 
+  getFavorites, 
+  getMe, 
+  uploadProfilePicture, 
+  updateProfile, 
+  googleLogin,
+  getAllUsers, 
+  updateUserRole, 
+  updateUserStatus, 
+  impersonateUser, 
+  getAuditLogs, 
+  deleteUser
 };
 

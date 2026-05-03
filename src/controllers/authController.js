@@ -676,5 +676,6 @@ module.exports = {
   impersonateUser, 
   getAuditLogs, 
   deleteUser,
-  adminResetAnyPassword 
+  adminResetAnyPassword,
+  loginUser,
 };

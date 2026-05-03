@@ -2,15 +2,26 @@ const nodemailer = require('nodemailer');
 
 // 1. Configure the transporter
 // Using general environment variables to allow for flexibility between Gmail, SendGrid, or custom SMTP
-const transporter = nodemailer.createTransport({
-  host: process.env.EMAIL_HOST,
-  port: process.env.EMAIL_PORT,
-  service: process.env.EMAIL_SERVICE, // e.g., 'gmail'
-  auth: {
-    user: process.env.EMAIL_USER || process.env.EMAIL_USERNAME,
-    pass: process.env.EMAIL_PASSWORD,
-  },
-});
+const emailServiceConfigured = process.env.EMAIL_USER && process.env.EMAIL_PASSWORD;
+
+const transporter = emailServiceConfigured 
+  ? nodemailer.createTransport({
+      host: process.env.EMAIL_HOST,
+      port: process.env.EMAIL_PORT,
+      service: process.env.EMAIL_SERVICE, // e.g., 'gmail'
+      auth: {
+        user: process.env.EMAIL_USER || process.env.EMAIL_USERNAME,
+        pass: process.env.EMAIL_PASSWORD,
+      },
+    })
+  : null;
+
+// Log email service status on startup
+if (!emailServiceConfigured) {
+  console.warn(`⚠️ [EMAIL SERVICE] Not configured - email verification emails will not be sent.`);
+  console.warn(`   To enable emails, set EMAIL_USER and EMAIL_PASSWORD in .env`);
+  console.warn(`   See .env.example for instructions`);
+}
 
 /**
  * Send email with verification link
@@ -22,6 +33,15 @@ const sendVerificationEmail = async ({
   frontendUrl,
 }) => {
   try {
+    if (!emailServiceConfigured) {
+      console.warn(`⚠️ [EMAIL SERVICE] Email not configured. Would have sent to: ${email}`);
+      return { success: false, error: 'Email service not configured', skipped: true };
+    }
+
+    if (!transporter) {
+      return { success: false, error: 'Email transporter failed to initialize', skipped: true };
+    }
+
     const verificationLink = `${frontendUrl}/verify-email?token=${verificationToken}`;
     
     const mailOptions = {
@@ -47,10 +67,12 @@ const sendVerificationEmail = async ({
       `,
     };
 
+    console.log(`[EMAIL SERVICE] Sending verification email to ${email}...`);
     await transporter.sendMail(mailOptions);
+    console.log(`✅ [EMAIL SERVICE] Verification email sent successfully to ${email}`);
     return { success: true };
   } catch (error) {
-    console.error("Email verification send error:", error);
+    console.error(`❌ [EMAIL SERVICE] Error sending verification email to ${email}:`, error.message);
     return { success: false, error: error.message };
   }
 };
@@ -65,6 +87,15 @@ const sendPasswordResetEmail = async ({
   frontendUrl,
 }) => {
   try {
+    if (!emailServiceConfigured) {
+      console.warn(`⚠️ [EMAIL SERVICE] Email not configured. Would have sent to: ${email}`);
+      return { success: false, error: 'Email service not configured', skipped: true };
+    }
+
+    if (!transporter) {
+      return { success: false, error: 'Email transporter failed to initialize', skipped: true };
+    }
+
     const resetLink = `${frontendUrl}/reset-password?token=${resetToken}`;
     
     const mailOptions = {
@@ -91,10 +122,12 @@ const sendPasswordResetEmail = async ({
       `,
     };
 
+    console.log(`[EMAIL SERVICE] Sending password reset email to ${email}...`);
     await transporter.sendMail(mailOptions);
+    console.log(`✅ [EMAIL SERVICE] Password reset email sent successfully to ${email}`);
     return { success: true };
   } catch (error) {
-    console.error("Password reset email send error:", error);
+    console.error(`❌ [EMAIL SERVICE] Error sending password reset email to ${email}:`, error.message);
     return { success: false, error: error.message };
   }
 };

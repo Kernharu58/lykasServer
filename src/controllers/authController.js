@@ -58,27 +58,69 @@ const signup = async (req, res) => {
     
     await newUser.save();
 
-    // 4. Send the verification email
-    const emailResult = await sendVerificationEmail({
-      email: newUser.email,
-      displayName: newUser.name,
-      verificationToken: token,
-      frontendUrl: process.env.FRONTEND_URL || 'http://localhost:3000' 
-    });
-
-    // 5. Handle email failure gracefully
-    if (!emailResult.success) {
-      return res.status(500).json({ message: 'User registered, but failed to send verification email.' });
+    // 4. Send the verification email (non-blocking)
+    let emailSent = false;
+    let emailSkipped = false;
+    try {
+      const emailResult = await sendVerificationEmail({
+        email: newUser.email,
+        displayName: newUser.name,
+        verificationToken: token,
+        frontendUrl: process.env.FRONTEND_URL || 'http://localhost:3000' 
+      });
+      
+      if (emailResult.skipped) {
+        emailSkipped = true;
+        console.warn(`⚠️ Signup: Email service not configured, skipping verification email for ${newUser.email}`);
+      } else if (emailResult.success) {
+        emailSent = true;
+        console.log(`✅ Verification email sent to ${newUser.email}`);
+      } else {
+        console.warn(`⚠️ Failed to send verification email to ${newUser.email}: ${emailResult.error}`);
+      }
+    } catch (emailError) {
+      console.error(`❌ Email service error for ${newUser.email}:`, emailError.message);
+      // Don't fail signup if email fails - user can request email resend later
     }
 
-    // 6. Success response
+    // 5. Success response
+    let message = 'Account created successfully!';
+    if (emailSent) {
+      message = 'Signup successful! Please check your email to verify your account.';
+    } else if (emailSkipped) {
+      message = 'Account created, but email verification is not yet configured. You can proceed to login.';
+    } else {
+      message = 'Account created! Please check your email to verify your account (check spam folder if needed).';
+    }
+
     res.status(201).json({ 
-      message: 'Signup successful! Please check your email to verify your account.' 
+      message,
+      user: {
+        id: newUser._id,
+        email: newUser.email,
+        name: newUser.name,
+        emailVerified: newUser.isVerified
+      }
     });
 
   } catch (error) {
-    console.error('Signup error:', error);
-    res.status(500).json({ message: 'Server error during signup' });
+    console.error('❌ Signup error:', error.message);
+    
+    // Check if it's a database validation error
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({ 
+        message: 'Invalid input data',
+        details: Object.values(error.errors).map(e => e.message)
+      });
+    }
+    
+    // Check if it's a duplicate key error
+    if (error.code === 11000) {
+      const field = Object.keys(error.keyPattern)[0];
+      return res.status(400).json({ message: `This ${field} is already registered` });
+    }
+    
+    res.status(500).json({ message: 'Server error during signup', error: error.message });
   }
 };
 

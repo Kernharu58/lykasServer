@@ -77,6 +77,5 @@ router.get("/audit-logs", superAdminOnly, getAuditLogs);
 
 // 👉 NEW: Force password reset
 // The ':id' can be a mobile user ID OR a staff member ID
-router.post("/admin/force-reset/:id", protect, adminAuth, adminResetAnyPassword);
-
+router.post("/admin/force-reset/:id", protect, restrictTo("admin", "super_admin"), adminResetAnyPassword);
 module.exports = router;

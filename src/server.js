@@ -11,7 +11,6 @@ const rateLimit = require("express-rate-limit");
 const Message = require("./models/Message");
 const User = require("./models/User");
 
-
 dotenv.config();
 
 // Use reliable public DNS servers for MongoDB SRV record resolution.

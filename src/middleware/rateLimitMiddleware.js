@@ -2,14 +2,13 @@ const rateLimit = require("express-rate-limit");
 
 // Rate limit for login attempts: 5 attempts per 15 minutes per IP
 const loginLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 5, // Limit each IP to 5 requests per windowMs
+  windowMs: 15 * 60 * 1000,
+  max: 5,
   message: "Too many login attempts, please try again after 15 minutes",
-  standardHeaders: true, // Return rate limit info in `RateLimit-*` headers
-  legacyHeaders: false, // Disable `X-RateLimit-*` headers
-  trustProxy: 1, // Trust first proxy for IPv6 support
+  standardHeaders: true,
+  legacyHeaders: false,
+  // REMOVE THIS LINE: trustProxy: 1, 
   skip: (req, res) => {
-    // Don't count requests that don't have email/password
     return !req.body.email || !req.body.password;
   },
 });

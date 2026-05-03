@@ -658,7 +658,7 @@ const googleLogin = async (req, res) => {
 };
 
 module.exports = { 
-  signup, // Renamed from registerUser to match your snippet
+  registerUser: signup, // Renamed from registerUser to match your snippet
   loginUser, 
   verifyEmail,
   forgotPassword,

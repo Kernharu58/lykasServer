@@ -20,7 +20,6 @@ const registerLimiter = rateLimit({
   message: "Too many registration attempts, please try again later",
   standardHeaders: true,
   legacyHeaders: false,
-  trustProxy: 1, // Trust first proxy for IPv6 support
   skip: (req, res) => {
     // Don't count requests that don't have required fields
     return !req.body.email || !req.body.password || !req.body.displayName;
@@ -34,7 +33,6 @@ const passwordResetLimiter = rateLimit({
   message: "Too many password reset attempts, please try again later",
   standardHeaders: true,
   legacyHeaders: false,
-  trustProxy: 1, // Trust first proxy for IPv6 support
   skip: (req, res) => {
     return !req.body.email;
   },

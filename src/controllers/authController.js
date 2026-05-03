@@ -49,11 +49,11 @@ const signup = async (req, res) => {
 
     // 3. Create and save the new user
     const newUser = new User({
-      name: userName, 
+      displayName: userName,  // ✅ Use displayName field (required by schema)
       email,
-      password: hashedPassword, // Applied the hashed password here
-      verificationToken: token,
-      isVerified: false 
+      password: hashedPassword,
+      emailVerificationToken: token,  // ✅ Correct field name from schema
+      emailVerified: false  // ✅ Correct field name from schema
     });
     
     await newUser.save();
@@ -64,7 +64,7 @@ const signup = async (req, res) => {
     try {
       const emailResult = await sendVerificationEmail({
         email: newUser.email,
-        displayName: newUser.name,
+        displayName: newUser.displayName,  // ✅ Use displayName (not name)
         verificationToken: token,
         frontendUrl: process.env.FRONTEND_URL || 'http://localhost:3000' 
       });
@@ -98,8 +98,8 @@ const signup = async (req, res) => {
       user: {
         id: newUser._id,
         email: newUser.email,
-        name: newUser.name,
-        emailVerified: newUser.isVerified
+        displayName: newUser.displayName,
+        emailVerified: newUser.emailVerified
       }
     });
 
@@ -169,10 +169,10 @@ const loginUser = async (req, res) => {
       token,
       user: {
         id: user._id,
-        displayName: user.displayName || user.name, // Fallback for schema difference
+        displayName: user.displayName,
         email: user.email,
         role: user.role,
-        emailVerified: user.emailVerified || user.isVerified, // Fallback for schema difference
+        emailVerified: user.emailVerified,
       },
     });
   } catch (error) {
@@ -202,11 +202,9 @@ const verifyEmail = async (req, res) => {
       return res.status(400).json({ message: "Invalid or expired verification token" });
     }
 
-    // Mark email as verified (handling both schema variations)
+    // Mark email as verified
     user.emailVerified = true;
-    user.isVerified = true;
     user.emailVerificationToken = null;
-    user.verificationToken = null;
     user.emailVerificationExpires = null;
     await user.save();
 
@@ -221,9 +219,9 @@ const verifyEmail = async (req, res) => {
       message: "Email verified successfully",
       user: {
         id: user._id,
-        displayName: user.displayName || user.name,
+        displayName: user.displayName,
         email: user.email,
-        emailVerified: user.emailVerified || user.isVerified,
+        emailVerified: user.emailVerified,
       },
     });
   } catch (error) {
@@ -260,7 +258,7 @@ const forgotPassword = async (req, res) => {
     // Send password reset email
     await sendPasswordResetEmail({
       email: user.email,
-      displayName: user.displayName || user.name,
+      displayName: user.displayName,
       resetToken,
       frontendUrl: FRONTEND_URL,
     });
@@ -474,7 +472,7 @@ const updateProfile = async (req, res) => {
       message: "Profile updated successfully",
       user: {
         id: updatedUser._id,
-        displayName: updatedUser.displayName || updatedUser.name,
+        displayName: updatedUser.displayName,
         email: updatedUser.email,
         profilePicture: updatedUser.profilePicture,
         notificationsEnabled: updatedUser.notificationsEnabled,
@@ -676,10 +674,10 @@ const googleLogin = async (req, res) => {
     
     if (!user) {
       user = await User.create({
-        name: payload.name, // Matched to your signup schema 
-        displayName: payload.name, 
+        displayName: payload.name,  // ✅ Use displayName (required field)
         email: payload.email,
         password: Math.random().toString(36).slice(-10) + "A1!", 
+        emailVerified: payload.email_verified || false,  // ✅ Use correct field name
         role: "user"
       });
     }
@@ -692,7 +690,7 @@ const googleLogin = async (req, res) => {
       token: jwtToken,
       user: {
         _id: user._id,
-        displayName: user.displayName || user.name,
+        displayName: user.displayName,
         email: user.email,
         role: user.role,
         profilePicture: user.profilePicture

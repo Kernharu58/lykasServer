@@ -678,4 +678,5 @@ module.exports = {
   deleteUser,
   adminResetAnyPassword,
   loginUser,
+  signup,
 };

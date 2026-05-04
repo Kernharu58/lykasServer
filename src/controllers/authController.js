@@ -643,25 +643,43 @@ const adminResetAnyPassword = async (req, res) => {
     const targetUser = await User.findById(targetUserId);
 
     if (!targetUser) {
-      return res.status(404).json({ message: 'User or account not found' });
+      return res.status(404).json({ message: 'User not found' });
     }
 
     // 1. Generate a secure reset token
-    const resetToken = targetUser.getResetPasswordToken(); 
+    const resetToken = crypto.randomBytes(32).toString("hex");
+    const resetPasswordExpires = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
+
+    targetUser.resetPasswordToken = resetToken;
+    targetUser.resetPasswordExpires = resetPasswordExpires;
     await targetUser.save({ validateBeforeSave: false });
 
-    // 2. Create the reset URL (pointing to the mobile app or admin panel based on user role)
-    const resetUrl = `${process.env.FRONTEND_URL}/reset-password/${resetToken}`;
+    // 2. Determine the correct frontend URL based on user role
+    let frontendUrl = FRONTEND_URL;
+    if (targetUser.role === 'user') {
+      frontendUrl = MOBILE_APP_URL;
+    }
 
-    // 3. Send the email via your emailService.js
-    const message = `You or an administrator requested a password reset. Please make a PUT request to: \n\n ${resetUrl}`;
-    await sendEmail({
+    // 3. Send the password reset email using the email service
+    await sendPasswordResetEmail({
       email: targetUser.email,
-      subject: 'Password Reset Request',
-      message
+      displayName: targetUser.displayName,
+      resetToken: resetToken,
+      frontendUrl: frontendUrl,
     });
 
-    res.status(200).json({ success: true, data: 'Reset email sent to the user.' });
+    // 4. Log the admin action
+    await createAuditLog({
+      actor: req.user?._id,
+      action: "ADMIN_PASSWORD_RESET",
+      targetUser: targetUser._id,
+      metadata: { email: targetUser.email, role: targetUser.role },
+    });
+
+    res.status(200).json({ 
+      message: `Password reset email sent to ${targetUser.email}`,
+      success: true 
+    });
 
   } catch (error) {
     console.error("Admin Reset Error:", error);

@@ -83,7 +83,12 @@ const signup = async (req, res) => {
       // Don't fail signup if email fails - user can request email resend later
     }
 
-    // 5. Success response
+    // 5. Generate JWT Token for instant login
+    const token = jwt.sign({ id: newUser._id }, process.env.JWT_SECRET, {
+      expiresIn: JWT_EXPIRES_IN,
+    });
+
+    // 6. Success response with token for auto-login
     let message = 'Account created successfully!';
     if (emailSent) {
       message = 'Signup successful! Please check your email to verify your account.';
@@ -95,11 +100,13 @@ const signup = async (req, res) => {
 
     res.status(201).json({ 
       message,
+      token,
       user: {
         id: newUser._id,
         email: newUser.email,
         displayName: newUser.displayName,
-        emailVerified: newUser.emailVerified
+        emailVerified: newUser.emailVerified,
+        role: newUser.role
       }
     });
 
@@ -108,19 +115,26 @@ const signup = async (req, res) => {
     
     // Check if it's a database validation error
     if (error.name === 'ValidationError') {
+      const details = Object.values(error.errors).map(e => e.message);
       return res.status(400).json({ 
         message: 'Invalid input data',
-        details: Object.values(error.errors).map(e => e.message)
+        details
       });
     }
     
     // Check if it's a duplicate key error
     if (error.code === 11000) {
       const field = Object.keys(error.keyPattern)[0];
-      return res.status(400).json({ message: `This ${field} is already registered` });
+      return res.status(409).json({ 
+        message: `This ${field} is already registered`,
+        field
+      });
     }
     
-    res.status(500).json({ message: 'Server error during signup', error: error.message });
+    res.status(500).json({ 
+      message: 'Server error during signup', 
+      error: error.message 
+    });
   }
 };
 
@@ -129,6 +143,11 @@ const signup = async (req, res) => {
 const loginUser = async (req, res) => {
   try {
     const { email, password } = req.body;
+
+    // Validate input
+    if (!email || !password) {
+      return res.status(400).json({ message: "Email and password are required" });
+    }
 
     // 1. Find the user by email
     const user = await User.findOne({ email });
@@ -173,6 +192,7 @@ const loginUser = async (req, res) => {
         email: user.email,
         role: user.role,
         emailVerified: user.emailVerified,
+        profilePicture: user.profilePicture,
       },
     });
   } catch (error) {
@@ -660,46 +680,108 @@ const googleLogin = async (req, res) => {
   }
 
   try {
-    const ticket = await client.verifyIdToken({
-      idToken,
-      audience: [
-        process.env.GOOGLE_CLIENT_ID,
-        process.env.ANDROID_CLIENT_ID,
-        process.env.IOS_CLIENT_ID
-      ].filter(Boolean) 
-    });
-    
-    const payload = ticket.getPayload();
-    let user = await User.findOne({ email: payload.email });
-    
-    if (!user) {
-      user = await User.create({
-        displayName: payload.name,  // ✅ Use displayName (required field)
-        email: payload.email,
-        password: Math.random().toString(36).slice(-10) + "A1!", 
-        emailVerified: payload.email_verified || false,  // ✅ Use correct field name
-        role: "user"
+    // Verify token with all possible client IDs
+    const clientIds = [
+      process.env.GOOGLE_CLIENT_ID,
+      process.env.ANDROID_CLIENT_ID,
+      process.env.IOS_CLIENT_ID
+    ].filter(Boolean);
+
+    if (clientIds.length === 0) {
+      console.error("❌ [CRITICAL] No Google Client IDs configured in environment variables");
+      return res.status(500).json({ 
+        message: "Google Auth is not properly configured on the server",
+        details: "Missing GOOGLE_CLIENT_ID environment variables"
       });
     }
 
+    console.log(`[Google Auth] Verifying token against ${clientIds.length} client IDs...`);
+
+    const ticket = await client.verifyIdToken({
+      idToken,
+      audience: clientIds
+    });
+    
+    const payload = ticket.getPayload();
+    console.log(`[Google Auth] ✅ Token verified for email: ${payload.email}`);
+
+    // Check if user already exists
+    let user = await User.findOne({ email: payload.email });
+    
+    if (!user) {
+      console.log(`[Google Auth] 🆕 Creating new user: ${payload.email}`);
+      
+      // Create new user from Google profile
+      user = await User.create({
+        displayName: payload.name,
+        email: payload.email,
+        password: Math.random().toString(36).slice(-10) + "A1!", // Random password for OAuth users
+        emailVerified: payload.email_verified || true, // Google emails are verified
+        role: "user",
+        profilePicture: payload.picture || "" // Store Google profile picture if available
+      });
+      
+      console.log(`[Google Auth] ✅ New user created: ${user._id}`);
+    } else {
+      console.log(`[Google Auth] 👤 Existing user found: ${user._id}`);
+      
+      // Update profile picture if available and not already set
+      if (payload.picture && !user.profilePicture) {
+        user.profilePicture = payload.picture;
+        await user.save();
+      }
+    }
+
+    // Generate JWT token
     const jwtToken = jwt.sign({ id: user._id }, process.env.JWT_SECRET, {
       expiresIn: JWT_EXPIRES_IN,
     });
 
+    console.log(`[Google Auth] ✅ JWT token generated, logging user in`);
+
+    await createAuditLog({
+      actor: user._id,
+      action: "GOOGLE_LOGIN",
+      targetUser: user._id,
+      metadata: { email: user.email, googleId: payload.sub },
+    });
+
     res.status(200).json({
+      message: "Google login successful",
       token: jwtToken,
       user: {
         _id: user._id,
         displayName: user.displayName,
         email: user.email,
         role: user.role,
-        profilePicture: user.profilePicture
+        profilePicture: user.profilePicture,
+        emailVerified: user.emailVerified
       },
     });
 
   } catch (error) {
-    console.log("❌ [CRITICAL ERROR] Google Auth Failed:", error.message);
-    res.status(500).json({ message: "Google Auth Failed", error: error.message });
+    console.error("❌ [GOOGLE AUTH ERROR]:", error.message);
+    console.error("Stack:", error.stack);
+    
+    // Handle specific verification errors
+    if (error.message.includes("Token used too late")) {
+      return res.status(400).json({ 
+        message: "Google token has expired. Please try again.",
+        error: error.message 
+      });
+    }
+    
+    if (error.message.includes("Wrong number of segments")) {
+      return res.status(400).json({ 
+        message: "Invalid Google token format.",
+        error: error.message 
+      });
+    }
+
+    res.status(500).json({ 
+      message: "Google authentication failed", 
+      error: error.message 
+    });
   }
 };
 

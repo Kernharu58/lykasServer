@@ -84,7 +84,7 @@ const signup = async (req, res) => {
     }
 
     // 5. Generate JWT Token for instant login
-    const token = jwt.sign({ id: newUser._id }, process.env.JWT_SECRET, {
+    token = jwt.sign({ id: newUser._id }, process.env.JWT_SECRET, {
       expiresIn: JWT_EXPIRES_IN,
     });
 

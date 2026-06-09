@@ -60,12 +60,30 @@ const authRoutes = require("./routes/authRoutes");
 const petRoutes = require("./routes/petRoutes");
 const appointmentRoutes = require("./routes/appointmentRoutes");
 const settingsRoutes = require("./routes/settingsRoutes");
+const applicationRoutes  = require("./routes/applicationRoutes");
+const auditLogRoutes     = require("./routes/auditLogRoutes");
+const volunteerRoutes    = require("./routes/volunteerRoutes");
+const shelterCareRoutes      = require("./routes/shelterCareRoutes");
+const medicalRoutes          = require("./routes/medicalRecordRoutes");
+const interviewRoutes        = require("./routes/interviewRoutes");
+const homeVisitRoutes        = require("./routes/homeVisitRoutes");
+const riskAssessmentRoutes   = require("./routes/riskAssessmentRoutes");
+const fosterRoutes           = require("./routes/fosterRoutes");
 const { protect, restrictTo } = require("./middleware/authMiddleware");
 
 app.use("/api/auth", authRoutes);
 app.use("/api/pets", petRoutes);
 app.use("/api/appointments", appointmentRoutes);
-app.use("/api/settings", settingsRoutes);
+app.use("/api/settings",     settingsRoutes);
+app.use("/api/applications",  applicationRoutes);
+app.use("/api/audit-logs",    auditLogRoutes);
+app.use("/api/volunteers",    volunteerRoutes);
+app.use("/api/shelter-care",      shelterCareRoutes);
+app.use("/api/medical",           medicalRoutes);
+app.use("/api/interviews",        interviewRoutes);
+app.use("/api/home-visits",       homeVisitRoutes);
+app.use("/api/risk-assessments",  riskAssessmentRoutes);
+app.use("/api/foster",            fosterRoutes);
 
 app.get(
   "/api/messages/:userId",

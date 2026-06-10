@@ -69,6 +69,9 @@ const interviewRoutes        = require("./routes/interviewRoutes");
 const homeVisitRoutes        = require("./routes/homeVisitRoutes");
 const riskAssessmentRoutes   = require("./routes/riskAssessmentRoutes");
 const fosterRoutes           = require("./routes/fosterRoutes");
+const monitoringReportRoutes = require("./routes/monitoringReportRoutes");
+const babyBookRoutes         = require("./routes/babyBookRoutes");
+const eventRoutes            = require("./routes/eventRoutes");
 const { protect, restrictTo } = require("./middleware/authMiddleware");
 
 app.use("/api/auth", authRoutes);
@@ -81,9 +84,12 @@ app.use("/api/volunteers",    volunteerRoutes);
 app.use("/api/shelter-care",      shelterCareRoutes);
 app.use("/api/medical",           medicalRoutes);
 app.use("/api/interviews",        interviewRoutes);
-app.use("/api/home-visits",       homeVisitRoutes);
-app.use("/api/risk-assessments",  riskAssessmentRoutes);
-app.use("/api/foster",            fosterRoutes);
+app.use("/api/home-visits",          homeVisitRoutes);
+app.use("/api/risk-assessments",    riskAssessmentRoutes);
+app.use("/api/foster",              fosterRoutes);
+app.use("/api/monitoring-reports",  monitoringReportRoutes);
+app.use("/api/baby-book",           babyBookRoutes);
+app.use("/api/events",              eventRoutes);
 
 app.get(
   "/api/messages/:userId",

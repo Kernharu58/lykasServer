@@ -260,3 +260,27 @@ connectDB()
     console.error(`Error connecting to MongoDB: ${error.message}`);
     process.exit(1);
   });
+// ─── Feature routes added in latest build ─────────────────────────────────────
+const monitoringReportRoutes  = require("./routes/monitoringReportRoutes");
+const babyBookRoutes          = require("./routes/babyBookRoutes");
+const eventRoutes             = require("./routes/eventRoutes");
+const notificationRoutes      = require("./routes/notificationRoutes");
+const paymentRoutes           = require("./routes/paymentRoutes");
+const eventAssignmentRoutes   = require("./routes/eventAssignmentRoutes");
+const dashboardRoutes         = require("./routes/dashboardRoutes");
+const userDocumentRoutes      = require("./routes/userDocumentRoutes");
+const adopterProfileRoutes    = require("./routes/adopterProfileRoutes");
+const emergencyReportRoutes   = require("./routes/emergencyReportRoutes");
+const reportsRoutes           = require("./routes/reportsRoutes");
+
+app.use("/api/monitoring-reports",  monitoringReportRoutes);
+app.use("/api/baby-book",           babyBookRoutes);
+app.use("/api/events",              eventRoutes);
+app.use("/api/notifications",       notificationRoutes);
+app.use("/api/payments",            paymentRoutes);
+app.use("/api/event-assignments",   eventAssignmentRoutes);
+app.use("/api/dashboard",           dashboardRoutes);
+app.use("/api/documents",           userDocumentRoutes);
+app.use("/api/adopter-profile",     adopterProfileRoutes);
+app.use("/api/emergency-reports",   emergencyReportRoutes);
+app.use("/api/reports",             reportsRoutes);

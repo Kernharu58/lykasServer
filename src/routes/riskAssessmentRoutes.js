@@ -8,10 +8,12 @@ const {
 
 const adminOnly = [protect, restrictTo("admin", "staff", "super_admin")];
 
+// Must be before /:id to avoid route collision
 router.get("/application/:applicationId", protect,   getByApplication);
-router.post("/",   adminOnly, createRiskAssessment);
-router.get("/",    adminOnly, getAllRiskAssessments);
-router.get("/:id", protect,   getRiskAssessmentById);
-router.put("/:id", adminOnly, updateRiskAssessment);
+
+router.post("/",    adminOnly, createRiskAssessment);
+router.get("/",     adminOnly, getAllRiskAssessments);
+router.get("/:id",  protect,   getRiskAssessmentById);
+router.put("/:id",  adminOnly, updateRiskAssessment);
 
 module.exports = router;

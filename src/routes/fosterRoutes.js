@@ -8,16 +8,23 @@ const {
 
 const adminOnly = [protect, restrictTo("admin", "staff", "super_admin")];
 
-router.get("/reports/pending-review",   adminOnly, getPendingReviews);
-router.put("/reports/:reportId/review", adminOnly, reviewFosterReport);
-router.get("/my",                       protect,   getMyFosters);
-router.post("/",                        adminOnly, startFoster);
-router.get("/",                         adminOnly, getAllFosters);
-router.get("/:id",                      protect,   getFosterById);
-router.put("/:id",                      adminOnly, updateFoster);
-router.put("/:id/end",                  adminOnly, endFoster);
-router.put("/:id/cancel",               adminOnly, cancelFoster);
-router.post("/:fosterId/reports",       protect,   submitFosterReport);
-router.get("/:fosterId/reports",        protect,   getFosterReports);
+// Report sub-routes — must be before /:fosterId to avoid collision
+router.get("/reports/pending-review",            adminOnly, getPendingReviews);
+router.put("/reports/:reportId/review",          adminOnly, reviewFosterReport);
+
+// My fosters (user)
+router.get("/my",                                protect,   getMyFosters);
+
+// Placement CRUD
+router.post("/",                                 adminOnly, startFoster);
+router.get("/",                                  adminOnly, getAllFosters);
+router.get("/:id",                               protect,   getFosterById);
+router.put("/:id",                               adminOnly, updateFoster);
+router.put("/:id/end",                           adminOnly, endFoster);
+router.put("/:id/cancel",                        adminOnly, cancelFoster);
+
+// Reports per placement
+router.post("/:fosterId/reports",                protect,   submitFosterReport);
+router.get("/:fosterId/reports",                 protect,   getFosterReports);
 
 module.exports = router;

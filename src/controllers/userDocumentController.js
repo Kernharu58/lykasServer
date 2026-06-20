@@ -1,7 +1,7 @@
 const UserDocument = require("../models/UserDocument");
 const AuditLog     = require("../models/AuditLog");
 const { notify }   = require("../utils/notificationHelper");
-const cloudinary   = require("../config/cloudinary");
+const { cloudinary } = require("../config/cloudinary");
 
 const logAction = async ({ actor, action, targetUser, metadata }) => {
   try { await AuditLog.create({ actor, action, targetUser, metadata }); } catch (e) { /* silent */ }

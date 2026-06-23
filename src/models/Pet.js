@@ -20,7 +20,8 @@ const petSchema = new mongoose.Schema(
     imageUrl: { type: String, required: true }, 
     status: {
       type: String,
-      enum: ["Available", "Pending", "Adopted"],
+      // 👉 FIX: Added "Foster" status so foster placements don't fail validation
+      enum: ["Available", "Pending", "Adopted", "Foster"],
       default: "Available",
     },
     owner: {

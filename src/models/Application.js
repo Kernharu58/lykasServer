@@ -27,6 +27,19 @@ const applicationSchema = new mongoose.Schema(
       required: true,
       trim: true,
     },
+    // 'adoption' (default) or 'foster'
+    type: {
+      type: String,
+      enum: ["adoption", "foster"],
+      default: "adoption",
+      index: true,
+    },
+    // Only relevant for foster applications
+    fosterPeriod: {
+      type: String,
+      trim: true,
+      default: null,
+    },
     status: {
       type: String,
       enum: ["pending", "approved", "rejected"],

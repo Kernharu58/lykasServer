@@ -175,7 +175,30 @@ const loginUser = async (req, res) => {
     // 3. Check if the password matches the hashed password in DB
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
+      // 🔒 SECURITY FIX: previously failed attempts were never recorded, so
+      // the "locked" status/lockedUntil fields could only ever be set
+      // manually by an admin — there was no actual brute-force protection.
+      // Shichi Auth spec §3: lock for 30 minutes after 5 consecutive misses.
+      user.failedLoginAttempts = (user.failedLoginAttempts || 0) + 1;
+
+      if (user.failedLoginAttempts >= 5) {
+        user.status = "locked";
+        user.lockedUntil = new Date(Date.now() + 30 * 60 * 1000);
+        user.failedLoginAttempts = 0;
+        await user.save();
+        return res.status(403).json({
+          message: "Too many failed attempts. Account locked for 30 minutes.",
+        });
+      }
+
+      await user.save();
       return res.status(400).json({ message: "Invalid credentials" });
+    }
+
+    // Successful password match — reset the failed-attempt counter
+    if (user.failedLoginAttempts > 0) {
+      user.failedLoginAttempts = 0;
+      await user.save();
     }
 
     // 3b. Block login if email has not been verified yet (Shichi Auth §3)
@@ -345,6 +368,11 @@ const resetPassword = async (req, res) => {
     user.password = hashedPassword;
     user.resetPasswordToken = null;
     user.resetPasswordExpires = null;
+    user.failedLoginAttempts = 0;
+    user.lockedUntil = null;
+    if (user.status === "locked") {
+      user.status = "active";
+    }
     await user.save();
 
     // Blacklist all existing tokens for this user
@@ -735,13 +763,24 @@ const googleLogin = async (req, res) => {
     
     if (!user) {
       console.log(`[Google Auth] 🆕 Creating new user: ${payload.email}`);
-      
+
+      // 🔒 BUG FIX: this random password was being saved in PLAIN TEXT, since
+      // this model has no pre-save hashing hook (signup() hashes manually
+      // before calling User.create). Hash it the same way here.
+      const randomPassword = crypto.randomBytes(20).toString("hex");
+      const salt = await bcrypt.genSalt(10);
+      const hashedRandomPassword = await bcrypt.hash(randomPassword, salt);
+
       // Create new user from Google profile
       user = await User.create({
         displayName: payload.name,
         email: payload.email,
-        password: Math.random().toString(36).slice(-10) + "A1!", // Random password for OAuth users
-        emailVerified: payload.email_verified || true, // Google emails are verified
+        password: hashedRandomPassword, // never used to log in directly, but must not be plaintext
+        // 🐛 BUG FIX: `payload.email_verified || true` always evaluated to
+        // true, even when Google reported the email as unverified, because
+        // `false || true` short-circuits to true. Use `??` so an explicit
+        // `false` is respected.
+        emailVerified: payload.email_verified ?? true,
         role: "user",
         profilePicture: payload.picture || "" // Store Google profile picture if available
       });

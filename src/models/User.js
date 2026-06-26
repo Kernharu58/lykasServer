@@ -52,6 +52,12 @@ const userSchema = new mongoose.Schema(
       type: Date, 
       default: null 
     },
+    // Tracks consecutive bad-password attempts so we can auto-lock the
+    // account for 30 minutes after 5 in a row (Shichi Auth spec §3).
+    failedLoginAttempts: {
+      type: Number,
+      default: 0,
+    },
     profilePicture: {
       type: String,
       default: "",

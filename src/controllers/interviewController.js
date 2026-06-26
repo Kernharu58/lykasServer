@@ -1,6 +1,8 @@
 const Interview    = require("../models/Interview");
 const Application  = require("../models/Application");
 const AuditLog     = require("../models/AuditLog");
+const { notify } = require("../utils/notificationHelper");
+const { autoRejectApplication } = require("./applicationController");
 
 const logAction = async ({ actor, action, targetUser, metadata }) => {
   try { await AuditLog.create({ actor, action, targetUser, metadata }); } catch (e) { /* silent */ }
@@ -45,6 +47,16 @@ const scheduleInterview = async (req, res) => {
       action: "INTERVIEW_SCHEDULED",
       targetUser: application.applicant._id,
       metadata: { interviewId: interview._id, applicationId, scheduledDate, method },
+    });
+
+    await notify({
+      recipient: application.applicant._id,
+      sender: req.user._id,
+      type: "INTERVIEW_SCHEDULED",
+      title: "Interview scheduled",
+      message: `An interview for your application for ${application.pet.name} has been scheduled (${method}).`,
+      refModel: "Interview",
+      refId: interview._id,
     });
 
     res.status(201).json({ message: "Interview scheduled", interview });
@@ -170,7 +182,8 @@ const completeInterview = async (req, res) => {
     }
 
     const interview = await Interview.findById(req.params.id)
-      .populate("applicant", "displayName email");
+      .populate("applicant", "displayName email")
+      .populate("pet", "name");
     if (!interview) return res.status(404).json({ message: "Interview not found" });
     if (interview.status === "completed") {
       return res.status(400).json({ message: "Interview is already completed" });
@@ -189,6 +202,26 @@ const completeInterview = async (req, res) => {
       targetUser: interview.applicant._id,
       metadata: { interviewId: interview._id, applicationId: interview.application, result },
     });
+
+    if (result === "failed") {
+      // ── Single source of truth for status: a failed interview rejects the
+      // application and frees the pet, instead of leaving it stuck "pending".
+      await autoRejectApplication({
+        applicationId: interview.application,
+        actorId: req.user._id,
+        reason: `Application rejected after interview (${notes || "no additional notes"}).`,
+      });
+    } else {
+      await notify({
+        recipient: interview.applicant._id,
+        sender: req.user._id,
+        type: "INTERVIEW_RESULT",
+        title: "Interview passed",
+        message: `Your interview for ${interview.pet?.name || "the pet"} passed. Staff will follow up about the home visit.`,
+        refModel: "Interview",
+        refId: interview._id,
+      });
+    }
 
     res.status(200).json({ message: `Interview marked as ${result}`, interview });
   } catch (error) { res.status(500).json({ message: "Server Error", error: error.message }); }
@@ -215,6 +248,16 @@ const cancelInterview = async (req, res) => {
       actor: req.user._id, action: "INTERVIEW_CANCELLED",
       targetUser: interview.applicant._id,
       metadata: { interviewId: interview._id, reason: interview.cancelReason },
+    });
+
+    await notify({
+      recipient: interview.applicant._id,
+      sender: req.user._id,
+      type: "INTERVIEW_CANCELLED",
+      title: "Interview cancelled",
+      message: interview.cancelReason || "Your scheduled interview was cancelled.",
+      refModel: "Interview",
+      refId: interview._id,
     });
 
     res.status(200).json({ message: "Interview cancelled", interview });

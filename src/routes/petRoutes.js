@@ -13,8 +13,6 @@ const {
   adoptPet,
   updatePet,
   deletePet,
-  getPendingAdoptions,
-  updateAdoptionApplicationStatus
 } = require("../controllers/petController");
 
 // Basic Pet Operations
@@ -25,9 +23,12 @@ router.route("/")
 
 // User-Specific Pet Operations (Must be above /:id)
 router.get("/my-pets", protect, getMyPets);
-// Admin-Specific Operations
-router.get("/pending-adoptions", adminOnly, getPendingAdoptions);
-router.put("/applications/:id/status", adminOnly, updateAdoptionApplicationStatus);
+// NOTE: pending-adoptions / applications/:id/status used to live here as a
+// second, divergent implementation of approve/reject (it didn't branch on
+// application.type the same way applicationController's version did). Removed
+// — use GET /api/applications?status=pending and
+// PUT /api/applications/:id/status instead, which are now the single source
+// of truth for the adoption/foster review workflow.
 
 // Specific Pet Details & Actions
 router.route("/:id")

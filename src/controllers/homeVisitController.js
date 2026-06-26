@@ -1,6 +1,8 @@
 const HomeVisit   = require("../models/HomeVisit");
 const Application = require("../models/Application");
 const AuditLog    = require("../models/AuditLog");
+const { notify } = require("../utils/notificationHelper");
+const { autoRejectApplication } = require("./applicationController");
 
 const logAction = async ({ actor, action, targetUser, metadata }) => {
   try { await AuditLog.create({ actor, action, targetUser, metadata }); } catch (e) { /* silent */ }
@@ -41,6 +43,16 @@ const scheduleHomeVisit = async (req, res) => {
       action: "HOME_VISIT_SCHEDULED",
       targetUser: application.applicant._id,
       metadata: { visitId: visit._id, applicationId, scheduledDate },
+    });
+
+    await notify({
+      recipient: application.applicant._id,
+      sender: req.user._id,
+      type: "HOME_VISIT_SCHEDULED",
+      title: "Home visit scheduled",
+      message: `A home visit for your application for ${application.pet.name} has been scheduled.`,
+      refModel: "HomeVisit",
+      refId: visit._id,
     });
 
     res.status(201).json({ message: "Home visit scheduled", visit });
@@ -162,7 +174,8 @@ const completeHomeVisit = async (req, res) => {
     }
 
     const visit = await HomeVisit.findById(req.params.id)
-      .populate("applicant", "displayName email");
+      .populate("applicant", "displayName email")
+      .populate("pet", "name");
     if (!visit) return res.status(404).json({ message: "Home visit not found" });
     if (visit.status === "completed") {
       return res.status(400).json({ message: "Home visit is already completed" });
@@ -182,6 +195,26 @@ const completeHomeVisit = async (req, res) => {
       targetUser: visit.applicant._id,
       metadata: { visitId: visit._id, applicationId: visit.application, result },
     });
+
+    if (result === "failed") {
+      // ── Single source of truth for status: a failed home visit rejects the
+      // application and frees the pet, instead of leaving it stuck "pending".
+      await autoRejectApplication({
+        applicationId: visit.application,
+        actorId: req.user._id,
+        reason: `Application rejected after home visit (${notes || "no additional notes"}).`,
+      });
+    } else {
+      await notify({
+        recipient: visit.applicant._id,
+        sender: req.user._id,
+        type: "HOME_VISIT_RESULT",
+        title: "Home visit passed",
+        message: `Your home visit for ${visit.pet?.name || "the pet"} passed. Staff will follow up with a final decision.`,
+        refModel: "HomeVisit",
+        refId: visit._id,
+      });
+    }
 
     res.status(200).json({ message: `Home visit marked as ${result}`, visit });
   } catch (error) {
@@ -208,6 +241,16 @@ const cancelHomeVisit = async (req, res) => {
       actor: req.user._id, action: "HOME_VISIT_CANCELLED",
       targetUser: visit.applicant._id,
       metadata: { visitId: visit._id, reason: visit.cancelReason },
+    });
+
+    await notify({
+      recipient: visit.applicant._id,
+      sender: req.user._id,
+      type: "HOME_VISIT_CANCELLED",
+      title: "Home visit cancelled",
+      message: visit.cancelReason || "Your scheduled home visit was cancelled.",
+      refModel: "HomeVisit",
+      refId: visit._id,
     });
 
     res.status(200).json({ message: "Home visit cancelled", visit });

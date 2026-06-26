@@ -1,5 +1,7 @@
 const Application = require("../models/Application");
 const AuditLog = require("../models/AuditLog");
+const { Foster } = require("../models/Foster");
+const { notify } = require("../utils/notificationHelper");
 
 // ─── Helper ──────────────────────────────────────────────────────────────────
 const logAction = async ({ actor, action, targetUser, metadata }) => {
@@ -9,6 +11,67 @@ const logAction = async ({ actor, action, targetUser, metadata }) => {
   } catch (err) {
     console.error("Audit log failed:", err.message);
   }
+};
+
+// ─── Helper: free up a pet if no other pending applications hold it ─────────
+const releasePetIfUnclaimed = async (pet, excludeApplicationId) => {
+  const otherPending = await Application.countDocuments({
+    pet: pet._id,
+    _id: { $ne: excludeApplicationId },
+    status: "pending",
+  });
+  if (otherPending === 0) {
+    pet.status = "Available";
+    pet.owner = null;
+  }
+};
+
+// ─── SHARED: Auto-reject an application (used by interview/home-visit fail) ──
+// This is the single place that enforces "a failed interview or home visit
+// rejects the application" — called from interviewController/homeVisitController
+// so Application.status is never silently left out of sync with the real
+// outcome of the vetting pipeline.
+const autoRejectApplication = async ({ applicationId, actorId, reason }) => {
+  const application = await Application.findById(applicationId)
+    .populate("pet")
+    .populate("applicant", "displayName email");
+
+  if (!application) return null;
+  if (application.status !== "pending") return application; // already decided, don't override
+
+  const Pet = require("../models/Pet");
+  const pet = application.pet ? await Pet.findById(application.pet._id) : null;
+
+  application.status = "rejected";
+  application.reviewedBy = actorId;
+  application.reviewedAt = new Date();
+  await application.save();
+
+  if (pet) {
+    if (pet.owner?.toString() === application.applicant._id.toString()) {
+      await releasePetIfUnclaimed(pet, application._id);
+    }
+    await pet.save();
+  }
+
+  await logAction({
+    actor: actorId,
+    action: "APPLICATION_REJECTED",
+    targetUser: application.applicant._id,
+    metadata: { applicationId: application._id, petId: pet?._id, reason },
+  });
+
+  await notify({
+    recipient: application.applicant._id,
+    sender: actorId,
+    type: "APPLICATION_REJECTED",
+    title: "Application not approved",
+    message: reason || "Your application was not approved after vetting.",
+    refModel: "Application",
+    refId: application._id,
+  });
+
+  return application;
 };
 
 // ─── USER: Get my applications ────────────────────────────────────────────────
@@ -76,16 +139,8 @@ const cancelApplication = async (req, res) => {
     const Pet = require("../models/Pet");
     const pet = await Pet.findById(application.pet._id);
     if (pet) {
-      const otherPending = await Application.countDocuments({
-        pet: pet._id,
-        _id: { $ne: application._id },
-        status: "pending",
-      });
-      if (otherPending === 0) {
-        pet.status = "Available";
-        pet.owner = null;
-        await pet.save();
-      }
+      await releasePetIfUnclaimed(pet, application._id);
+      await pet.save();
     }
 
     await application.deleteOne();
@@ -144,12 +199,13 @@ const getAllApplications = async (req, res) => {
 
 // ─── ADMIN: Update application status ────────────────────────────────────────
 // PUT /api/applications/:id/status  { status: "approved" | "rejected" }
-// NOTE: The pet-level approve/reject also lives in petController for backward
-// compat with the admin panel. This endpoint does the same but lives under
-// /api/applications so the mobile app can use it cleanly.
+// This is the single source of truth for approve/reject (the old duplicate
+// in petController has been removed — see petRoutes.js). It branches on
+// application.type so a FOSTER approval creates a Foster placement and marks
+// the pet "Foster" instead of permanently marking it "Adopted".
 const updateApplicationStatus = async (req, res) => {
   try {
-    const { status } = req.body;
+    const { status, remarks } = req.body;
 
     if (!["approved", "rejected"].includes(status)) {
       return res.status(400).json({ message: "Status must be 'approved' or 'rejected'" });
@@ -162,6 +218,11 @@ const updateApplicationStatus = async (req, res) => {
     if (!application) {
       return res.status(404).json({ message: "Application not found" });
     }
+    if (application.status !== "pending") {
+      return res.status(400).json({
+        message: `This application is already ${application.status}`,
+      });
+    }
 
     const Pet = require("../models/Pet");
     const pet = await Pet.findById(application.pet._id);
@@ -171,23 +232,54 @@ const updateApplicationStatus = async (req, res) => {
     application.reviewedAt = new Date();
 
     if (status === "approved") {
-      pet.status = "Adopted";
-      pet.owner = application.applicant._id;
-      // Auto-reject all other pending applications for this pet
-      await Application.updateMany(
-        { pet: pet._id, _id: { $ne: application._id }, status: "pending" },
-        { status: "rejected", reviewedBy: req.user._id, reviewedAt: new Date() }
-      );
+      if (application.type === "foster") {
+        // ─── FOSTER approval: create the Foster placement, don't mark Adopted ───
+        const existingActive = await Foster.findOne({ pet: pet._id, status: "active" });
+        if (!existingActive) {
+          let expectedEndDate = null;
+          if (application.fosterPeriod) {
+            const months =
+              application.fosterPeriod === "1 month" ? 1 :
+              application.fosterPeriod === "2 months" ? 2 : null; // "Flexible" → no end date
+            if (months) {
+              expectedEndDate = new Date();
+              expectedEndDate.setMonth(expectedEndDate.getMonth() + months);
+            }
+          }
+
+          await Foster.create({
+            pet: pet._id,
+            fosterer: application.applicant._id,
+            application: application._id,
+            startDate: new Date(),
+            expectedEndDate,
+            assignedBy: req.user._id,
+          });
+        }
+
+        pet.status = "Foster";
+        pet.owner = application.applicant._id;
+
+        // Reject other pending FOSTER applications for this pet only
+        await Application.updateMany(
+          { pet: pet._id, _id: { $ne: application._id }, status: "pending", type: "foster" },
+          { status: "rejected", reviewedBy: req.user._id, reviewedAt: new Date() }
+        );
+      } else {
+        // ─── ADOPTION approval ──────────────────────────────────────────────
+        pet.status = "Adopted";
+        pet.owner = application.applicant._id;
+        // Auto-reject all other pending applications for this pet (any type)
+        await Application.updateMany(
+          { pet: pet._id, _id: { $ne: application._id }, status: "pending" },
+          { status: "rejected", reviewedBy: req.user._id, reviewedAt: new Date() }
+        );
+      }
     } else {
-      // Only reset pet if no other pending applications remain
-      const otherPending = await Application.countDocuments({
-        pet: pet._id,
-        _id: { $ne: application._id },
-        status: "pending",
-      });
-      if (otherPending === 0) {
-        pet.status = "Available";
-        pet.owner = null;
+      // Rejected — only revert pet status if it was this applicant holding it,
+      // and only if no other pending application still needs it.
+      if (pet.owner?.toString() === application.applicant._id.toString()) {
+        await releasePetIfUnclaimed(pet, application._id);
       }
     }
 
@@ -202,8 +294,24 @@ const updateApplicationStatus = async (req, res) => {
         applicationId: application._id,
         petId: pet._id,
         petName: pet.name,
+        type: application.type,
         reviewedBy: req.user.displayName,
       },
+    });
+
+    await notify({
+      recipient: application.applicant._id,
+      sender: req.user._id,
+      type: status === "approved" ? "APPLICATION_APPROVED" : "APPLICATION_REJECTED",
+      title: status === "approved" ? "Application approved!" : "Application not approved",
+      message:
+        status === "approved"
+          ? application.type === "foster"
+            ? `Your foster application for ${pet.name} was approved.`
+            : `Congratulations! Your adoption application for ${pet.name} was approved.`
+          : remarks || `Your application for ${pet.name} was not approved.`,
+      refModel: "Application",
+      refId: application._id,
     });
 
     res.status(200).json({ message: `Application ${status}`, application });
@@ -218,4 +326,5 @@ module.exports = {
   cancelApplication,
   getAllApplications,
   updateApplicationStatus,
+  autoRejectApplication,
 };

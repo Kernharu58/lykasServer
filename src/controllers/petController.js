@@ -1,7 +1,6 @@
 const Pet = require("../models/Pet");
 const AuditLog = require("../models/AuditLog");
 const Application = require("../models/Application");
-const { Foster } = require("../models/Foster");
 
 // Helper for internal logging
 const createAuditLog = async ({ actor, action, targetUser, metadata }) => {
@@ -224,102 +223,15 @@ const deletePet = async (req, res) => {
   }
 };
 
-// @desc    Get all pending adoptions
-const getPendingAdoptions = async (req, res) => {
-  try {
-    const applications = await Application.find({ status: "pending" })
-      .populate("applicant", "displayName email profilePicture")
-      .populate("pet")
-      .sort({ createdAt: -1 });
-      
-    res.status(200).json(applications);
-  } catch (error) {
-    res.status(500).json({ message: "Server Error", error: error.message });
-  }
-};
-
-// @desc    Approve or reject an adoption/foster application
-// @route   PUT /api/pets/applications/:id
-const updateAdoptionApplicationStatus = async (req, res) => {
-  try {
-    const { status } = req.body;
-
-    if (!["approved", "rejected"].includes(status)) {
-      return res.status(400).json({ message: "Status must be approved or rejected" });
-    }
-
-    const application = await Application.findById(req.params.id).populate("pet");
-    if (!application) return res.status(404).json({ message: "Application not found" });
-
-    const pet = await Pet.findById(application.pet._id);
-    application.status = status;
-    application.reviewedBy = req.user._id;
-    application.reviewedAt = new Date();
-
-    if (status === "approved") {
-      if (application.type === "foster") {
-        // ─── FOSTER approval: auto-create a Foster placement ───────────────
-        const existingActive = await Foster.findOne({ pet: pet._id, status: "active" });
-        if (!existingActive) {
-          // Calculate expectedEndDate from fosterPeriod if supplied
-          let expectedEndDate = null;
-          if (application.fosterPeriod) {
-            const months = application.fosterPeriod === "1 month" ? 1
-                         : application.fosterPeriod === "2 months" ? 2
-                         : null; // "Flexible" → no end date
-            if (months) {
-              expectedEndDate = new Date();
-              expectedEndDate.setMonth(expectedEndDate.getMonth() + months);
-            }
-          }
-
-          await Foster.create({
-            pet:         pet._id,
-            fosterer:    application.applicant,
-            application: application._id,
-            startDate:   new Date(),
-            expectedEndDate,
-            assignedBy:  req.user._id,
-          });
-        }
-
-        // Mark pet as Foster (not Adopted) while in trial
-        pet.status = "Foster";
-        pet.owner  = application.applicant;
-
-        // Reject other pending foster applications for this pet
-        await Application.updateMany(
-          { pet: pet._id, _id: { $ne: application._id }, status: "pending", type: "foster" },
-          { status: "rejected", reviewedBy: req.user._id, reviewedAt: new Date() },
-        );
-      } else {
-        // ─── ADOPTION approval: existing behaviour ─────────────────────────
-        pet.status = "Adopted";
-        pet.owner  = application.applicant;
-        await Application.updateMany(
-          { pet: pet._id, _id: { $ne: application._id }, status: "pending" },
-          { status: "rejected", reviewedBy: req.user._id, reviewedAt: new Date() },
-        );
-      }
-    } else {
-      // Rejected — only revert pet status if it was this applicant holding it
-      if (
-        application.type === "adoption" &&
-        pet.owner?.toString() === application.applicant.toString()
-      ) {
-        pet.status = "Available";
-        pet.owner  = null;
-      }
-    }
-
-    await application.save();
-    await pet.save();
-
-    res.status(200).json(application);
-  } catch (error) {
-    res.status(500).json({ message: "Server Error", error: error.message });
-  }
-};
+// NOTE: getPendingAdoptions / updateAdoptionApplicationStatus used to live
+// here as a second, divergent implementation of approve/reject. They were
+// dead code (the admin panel and mobile app only ever called the
+// /api/applications/:id/status endpoint in applicationController), but their
+// presence meant two different functions could disagree about how to handle
+// foster vs. adoption applications. Removed in favor of a single source of
+// truth: applicationController.updateApplicationStatus (which now handles
+// both types correctly). See routes/applicationRoutes.js and
+// routes/petRoutes.js.
 
 module.exports = {
   getPets,
@@ -329,6 +241,4 @@ module.exports = {
   adoptPet,
   updatePet,
   deletePet,
-  getPendingAdoptions,
-  updateAdoptionApplicationStatus,
 };

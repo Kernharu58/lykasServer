@@ -28,16 +28,15 @@ cron.schedule("0 0 * * *", async () => {
     if (overdue.length > 0) {
       console.log(`${label} - ${overdue.length} foster trial(s) overdue — staff notification triggered`);
       for (const foster of overdue) {
-        // Notification hook: import notificationHelper if available
         try {
-          const { createNotification } = require("./utils/notificationHelper");
-          await createNotification({
+          const { notify } = require("./utils/notificationHelper");
+          await notify({
             recipient: foster.fosterer._id,
             type: "FOSTER_TRIAL_OVERDUE",
             title: "Foster Trial Period Ended",
             message: `The foster trial for ${foster.pet?.name || "your pet"} has ended. Please coordinate with staff to finalize your decision.`,
-            relatedId: foster._id,
-            relatedModel: "Foster",
+            refModel: "Foster",
+            refId: foster._id,
           });
         } catch (notifErr) {
           console.warn(`${label} - Could not send notification for foster ${foster._id}:`, notifErr.message);

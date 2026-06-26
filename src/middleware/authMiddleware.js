@@ -57,4 +57,7 @@ const restrictTo = (...roles) => {
     };
 };
 
-module.exports = { protect, restrictTo };
+// Alias for routes that import adminAuth explicitly
+const adminAuth = restrictTo("admin", "staff", "super_admin");
+
+module.exports = { protect, restrictTo, adminAuth };

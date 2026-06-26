@@ -41,7 +41,7 @@ const signup = async (req, res) => {
     }
 
     // 2. Generate a random verification token
-    const token = crypto.randomBytes(32).toString('hex'); 
+    let token = crypto.randomBytes(32).toString('hex'); 
 
     // 👉 APPLIED FIX: Hash the password using bcrypt before saving
     const salt = await bcrypt.genSalt(10);
@@ -176,6 +176,13 @@ const loginUser = async (req, res) => {
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
       return res.status(400).json({ message: "Invalid credentials" });
+    }
+
+    // 3b. Block login if email has not been verified yet (Shichi Auth §3)
+    if (!user.emailVerified) {
+      return res.status(403).json({
+        message: "Please verify your email before logging in. Check your inbox for a verification link.",
+      });
     }
 
     // 4. Generate a JWT Token
@@ -804,7 +811,7 @@ const googleLogin = async (req, res) => {
 };
 
 module.exports = { 
-  registerUser: signup, // Renamed from registerUser to match your snippet
+  registerUser: signup,
   loginUser, 
   verifyEmail,
   forgotPassword,
@@ -823,6 +830,5 @@ module.exports = {
   getAuditLogs, 
   deleteUser,
   adminResetAnyPassword,
-  loginUser,
   signup,
 };

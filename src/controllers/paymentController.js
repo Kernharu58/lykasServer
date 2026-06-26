@@ -102,6 +102,26 @@ const createCheckout = async (req, res) => {
 // POST /api/payments/webhook  (public — no auth, PayMongo calls this)
 const handleWebhook = async (req, res) => {
   try {
+    // ── Signature verification (Shichi §4: always verify before parsing) ──
+    const webhookSecret = process.env.PAYMONGO_WEBHOOK_SECRET;
+    if (webhookSecret) {
+      const signature = req.headers["paymongo-signature"];
+      if (!signature) {
+        return res.status(401).json({ message: "Missing webhook signature" });
+      }
+      // PayMongo signature format: "t=<timestamp>,te=<hash>,li=<hash>"
+      const parts = Object.fromEntries(signature.split(",").map((p) => p.split("=")));
+      const timestamp = parts.t;
+      const toSign = `${timestamp}.${JSON.stringify(req.body)}`;
+      const expectedHash = require("crypto")
+        .createHmac("sha256", webhookSecret)
+        .update(toSign)
+        .digest("hex");
+      if (parts.te !== expectedHash && parts.li !== expectedHash) {
+        return res.status(401).json({ message: "Invalid webhook signature" });
+      }
+    }
+
     const event = req.body;
     const eventType = event?.data?.attributes?.type;
     const resource  = event?.data?.attributes?.data;

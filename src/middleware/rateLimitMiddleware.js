@@ -7,7 +7,6 @@ const loginLimiter = rateLimit({
   message: "Too many login attempts, please try again after 15 minutes",
   standardHeaders: true,
   legacyHeaders: false,
-  // REMOVE THIS LINE: trustProxy: 1, 
   skip: (req, res) => {
     return !req.body.email || !req.body.password;
   },

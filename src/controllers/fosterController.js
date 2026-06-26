@@ -1,4 +1,4 @@
-const { Foster, FosterReport } = require("../models/Foster");
+const { Foster, FosterReport, MIN_FOSTER_TRIAL_DAYS, MAX_FOSTER_TRIAL_DAYS } = require("../models/Foster");
 const Pet      = require("../models/Pet");
 const AuditLog = require("../models/AuditLog");
 
@@ -10,12 +10,17 @@ const logAction = async ({ actor, action, targetUser, metadata }) => {
 // FOSTER PLACEMENTS
 // ═══════════════════════════════════════════════════════════
 
-// ─── ADMIN: Start a foster placement ─────────────────────────────────────────
+// ─── ADMIN: Start a foster placement (trial) ──────────────────────────────────
 // POST /api/foster
-// { petId, fostererId, startDate, expectedEndDate, applicationId, pickupNotes, fosterAgreementSigned }
+// { petId, fostererId, startDate, expectedEndDate, trialDurationDays,
+//   applicationId, pickupNotes, fosterAgreementSigned }
 const startFoster = async (req, res) => {
   try {
-    const { petId, fostererId, startDate, expectedEndDate, applicationId, pickupNotes, fosterAgreementSigned } = req.body;
+    const {
+      petId, fostererId, startDate, expectedEndDate, applicationId,
+      pickupNotes, fosterAgreementSigned,
+      trialDurationDays,   // NEW: explicit trial duration (30–60 days)
+    } = req.body;
 
     const pet = await Pet.findById(petId);
     if (!pet) return res.status(404).json({ message: "Pet not found" });
@@ -26,12 +31,33 @@ const startFoster = async (req, res) => {
       return res.status(400).json({ message: `${pet.name} already has an active foster placement` });
     }
 
+    // ── Pseudocode §1: Enforce 30–60 day trial window ────────────────────────
+    const days = trialDurationDays ? Number(trialDurationDays) : null;
+    if (days !== null) {
+      if (days < MIN_FOSTER_TRIAL_DAYS) {
+        return res.status(400).json({ message: `Trial must be at least ${MIN_FOSTER_TRIAL_DAYS} days` });
+      }
+      if (days > MAX_FOSTER_TRIAL_DAYS) {
+        return res.status(400).json({ message: `Trial cannot exceed ${MAX_FOSTER_TRIAL_DAYS} days` });
+      }
+    }
+
+    const start = startDate ? new Date(startDate) : new Date();
+    const computedEndDate = days
+      ? new Date(start.getTime() + days * 86400000)
+      : (expectedEndDate ? new Date(expectedEndDate) : null);
+
+    const weeksRequired = days ? Math.ceil(days / 7) : null;
+
     const foster = await Foster.create({
       pet:         petId,
       fosterer:    fostererId,
       application: applicationId || null,
-      startDate:   startDate || new Date(),
-      expectedEndDate,
+      startDate:   start,
+      expectedEndDate: computedEndDate,
+      trialDurationDays:      days,
+      weeklyReportsRequired:  weeksRequired,
+      weeklyReportsSubmitted: 0,
       pickupNotes,
       fosterAgreementSigned: fosterAgreementSigned || false,
       assignedBy:  req.user._id,
@@ -41,7 +67,7 @@ const startFoster = async (req, res) => {
       actor: req.user._id,
       action: "FOSTER_STARTED",
       targetUser: fostererId,
-      metadata: { fosterId: foster._id, petId, petName: pet.name },
+      metadata: { fosterId: foster._id, petId, petName: pet.name, trialDurationDays: days },
     });
 
     res.status(201).json({ message: `Foster placement started for ${pet.name}`, foster });
@@ -50,8 +76,48 @@ const startFoster = async (req, res) => {
   }
 };
 
+// ─── ADMIN: Check eligibility before finalizing adoption ─────────────────────
+// GET /api/foster/:id/can-finalize
+// Implements pseudocode §1: canFinalizeAdoption()
+const canFinalizeAdoption = async (req, res) => {
+  try {
+    const foster = await Foster.findById(req.params.id);
+    if (!foster) return res.status(404).json({ message: "Foster placement not found" });
+
+    if (foster.status !== "active") {
+      return res.status(200).json({ allowed: false, reason: "Trial is not active" });
+    }
+
+    // Check minimum trial period
+    const minEnd = new Date(foster.startDate.getTime() + MIN_FOSTER_TRIAL_DAYS * 86400000);
+    if (new Date() < minEnd) {
+      const daysLeft = Math.ceil((minEnd - new Date()) / 86400000);
+      return res.status(200).json({
+        allowed: false,
+        reason: `Minimum ${MIN_FOSTER_TRIAL_DAYS}-day trial period not yet met (${daysLeft} days remaining)`,
+      });
+    }
+
+    // Check all weekly reports submitted
+    if (foster.weeklyReportsRequired !== null) {
+      const missing = foster.weeklyReportsRequired - foster.weeklyReportsSubmitted;
+      if (missing > 0) {
+        return res.status(200).json({
+          allowed: false,
+          reason: `${missing} weekly report(s) still missing`,
+        });
+      }
+    }
+
+    res.status(200).json({ allowed: true });
+  } catch (error) {
+    res.status(500).json({ message: "Server Error", error: error.message });
+  }
+};
+
 // ─── ADMIN: End / return a foster placement ───────────────────────────────────
-// PUT /api/foster/:id/end  { returnNotes }
+// PUT /api/foster/:id/end
+// { returnNotes, outcome }   outcome = ADOPTED | RETURNED | EXTENDED
 const endFoster = async (req, res) => {
   try {
     const foster = await Foster.findById(req.params.id).populate("pet", "name");
@@ -60,20 +126,71 @@ const endFoster = async (req, res) => {
       return res.status(400).json({ message: "Foster placement is already ended" });
     }
 
+    const outcome = req.body.outcome || "RETURNED";
+
+    // ── Pseudocode §1: finalizeFosterTrial – gate on eligibility for ADOPTED
+    if (outcome === "ADOPTED") {
+      // Inline canFinalizeAdoption check
+      const minEnd = new Date(foster.startDate.getTime() + MIN_FOSTER_TRIAL_DAYS * 86400000);
+      if (new Date() < minEnd) {
+        const daysLeft = Math.ceil((minEnd - new Date()) / 86400000);
+        return res.status(400).json({
+          message: `Cannot finalize adoption: minimum trial period not met (${daysLeft} days left)`,
+        });
+      }
+      if (foster.weeklyReportsRequired !== null) {
+        const missing = foster.weeklyReportsRequired - foster.weeklyReportsSubmitted;
+        if (missing > 0) {
+          return res.status(400).json({
+            message: `Cannot finalize adoption: ${missing} weekly report(s) still missing`,
+          });
+        }
+      }
+    }
+
+    // ── Handle EXTENDED outcome ──────────────────────────────────────────────
+    if (outcome === "EXTENDED") {
+      const EXTENSION_DAYS = 14;
+      const currentEnd = foster.expectedEndDate || new Date();
+      const newEnd = new Date(currentEnd.getTime() + EXTENSION_DAYS * 86400000);
+      // Cap at MAX_FOSTER_TRIAL_DAYS from start
+      const hardCap = new Date(foster.startDate.getTime() + MAX_FOSTER_TRIAL_DAYS * 86400000);
+      foster.expectedEndDate = newEnd > hardCap ? hardCap : newEnd;
+      if (foster.trialDurationDays) {
+        foster.trialDurationDays = Math.min(
+          foster.trialDurationDays + EXTENSION_DAYS,
+          MAX_FOSTER_TRIAL_DAYS
+        );
+        foster.weeklyReportsRequired = Math.ceil(foster.trialDurationDays / 7);
+      }
+      foster.staffNotes = req.body.staffNotes || req.body.returnNotes || "";
+      await foster.save();
+      await logAction({
+        actor: req.user._id, action: "FOSTER_EXTENDED",
+        targetUser: foster.fosterer,
+        metadata: { fosterId: foster._id, petId: foster.pet._id, petName: foster.pet.name, newEndDate: foster.expectedEndDate },
+      });
+      return res.status(200).json({ message: "Foster trial extended by 14 days", foster });
+    }
+
+    // ── ADOPTED or RETURNED ──────────────────────────────────────────────────
     foster.status      = "completed";
+    foster.outcome     = outcome;
     foster.endDate     = new Date();
+    foster.closedAt    = new Date();
     foster.endedBy     = req.user._id;
     foster.returnNotes = req.body.returnNotes || "";
+    foster.staffNotes  = req.body.staffNotes  || "";
     await foster.save();
 
     await logAction({
       actor: req.user._id,
-      action: "FOSTER_ENDED",
+      action: outcome === "ADOPTED" ? "FOSTER_FINALIZED_ADOPTED" : "FOSTER_ENDED",
       targetUser: foster.fosterer,
-      metadata: { fosterId: foster._id, petId: foster.pet._id, petName: foster.pet.name },
+      metadata: { fosterId: foster._id, petId: foster.pet._id, petName: foster.pet.name, outcome },
     });
 
-    res.status(200).json({ message: "Foster placement ended", foster });
+    res.status(200).json({ message: `Foster placement ${outcome === "ADOPTED" ? "finalized (adopted)" : "ended"}`, foster });
   } catch (error) {
     res.status(500).json({ message: "Server Error", error: error.message });
   }
@@ -199,7 +316,7 @@ const updateFoster = async (req, res) => {
 };
 
 // ═══════════════════════════════════════════════════════════
-// FOSTER REPORTS
+// FOSTER REPORTS (pseudocode §2)
 // ═══════════════════════════════════════════════════════════
 
 // ─── USER (fosterer): Submit weekly report ────────────────────────────────────
@@ -247,7 +364,38 @@ const submitFosterReport = async (req, res) => {
       notes,
     });
 
+    // ── Pseudocode §2: increment weeklyReportsSubmitted ──────────────────────
+    foster.weeklyReportsSubmitted = (foster.weeklyReportsSubmitted || 0) + 1;
+    await foster.save();
+
     res.status(201).json({ message: `Week ${weekNumber} report submitted`, report });
+  } catch (error) {
+    res.status(500).json({ message: "Server Error", error: error.message });
+  }
+};
+
+// ─── SHARED: Get missing weekly report numbers ────────────────────────────────
+// GET /api/foster/:fosterId/reports/missing
+// Implements pseudocode §2: getMissingWeeklyReports()
+const getMissingWeeklyReports = async (req, res) => {
+  try {
+    const foster = await Foster.findById(req.params.fosterId);
+    if (!foster) return res.status(404).json({ message: "Foster placement not found" });
+
+    const isAdmin = ["admin", "staff", "super_admin"].includes(req.user.role);
+    const isOwner = foster.fosterer.toString() === req.user._id.toString();
+    if (!isAdmin && !isOwner) return res.status(403).json({ message: "Not authorized" });
+
+    const required = foster.weeklyReportsRequired || 0;
+    const submitted = await FosterReport.find({ foster: foster._id }, "weekNumber");
+    const submittedWeeks = new Set(submitted.map(r => r.weekNumber));
+
+    const missing = [];
+    for (let w = 1; w <= required; w++) {
+      if (!submittedWeeks.has(w)) missing.push(w);
+    }
+
+    res.status(200).json({ missing, required, submitted: submittedWeeks.size });
   } catch (error) {
     res.status(500).json({ message: "Server Error", error: error.message });
   }
@@ -318,7 +466,9 @@ module.exports = {
   getFosterById,
   getMyFosters,
   updateFoster,
+  canFinalizeAdoption,
   submitFosterReport,
+  getMissingWeeklyReports,
   getFosterReports,
   reviewFosterReport,
   getPendingReviews,

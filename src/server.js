@@ -56,35 +56,59 @@ app.get("/", (_req, res) => {
   res.send("CarePaws API is running...");
 });
 
-const authRoutes = require("./routes/authRoutes");
-const petRoutes = require("./routes/petRoutes");
-const appointmentRoutes = require("./routes/appointmentRoutes");
-const settingsRoutes = require("./routes/settingsRoutes");
-const applicationRoutes  = require("./routes/applicationRoutes");
-const auditLogRoutes     = require("./routes/auditLogRoutes");
-const volunteerRoutes    = require("./routes/volunteerRoutes");
+// ─── All routes registered BEFORE server starts (BUG FIX) ────────────────────
+const authRoutes             = require("./routes/authRoutes");
+const petRoutes              = require("./routes/petRoutes");
+const appointmentRoutes      = require("./routes/appointmentRoutes");
+const settingsRoutes         = require("./routes/settingsRoutes");
+const applicationRoutes      = require("./routes/applicationRoutes");
+const auditLogRoutes         = require("./routes/auditLogRoutes");
+const volunteerRoutes        = require("./routes/volunteerRoutes");
 const shelterCareRoutes      = require("./routes/shelterCareRoutes");
 const medicalRoutes          = require("./routes/medicalRecordRoutes");
 const interviewRoutes        = require("./routes/interviewRoutes");
 const homeVisitRoutes        = require("./routes/homeVisitRoutes");
 const riskAssessmentRoutes   = require("./routes/riskAssessmentRoutes");
 const fosterRoutes           = require("./routes/fosterRoutes");
+const monitoringReportRoutes = require("./routes/monitoringReportRoutes");
+const babyBookRoutes         = require("./routes/babyBookRoutes");
+const eventRoutes            = require("./routes/eventRoutes");
+const notificationRoutes     = require("./routes/notificationRoutes");
+const paymentRoutes          = require("./routes/paymentRoutes");
+const eventAssignmentRoutes  = require("./routes/eventAssignmentRoutes");
+const dashboardRoutes        = require("./routes/dashboardRoutes");
+const userDocumentRoutes     = require("./routes/userDocumentRoutes");
+const adopterProfileRoutes   = require("./routes/adopterProfileRoutes");
+const emergencyReportRoutes  = require("./routes/emergencyReportRoutes");
+const reportsRoutes          = require("./routes/reportsRoutes");
 const { protect, restrictTo } = require("./middleware/authMiddleware");
 
-app.use("/api/auth", authRoutes);
-app.use("/api/pets", petRoutes);
-app.use("/api/appointments", appointmentRoutes);
-app.use("/api/settings",     settingsRoutes);
-app.use("/api/applications",  applicationRoutes);
-app.use("/api/audit-logs",    auditLogRoutes);
-app.use("/api/volunteers",    volunteerRoutes);
+app.use("/api/auth",              authRoutes);
+app.use("/api/pets",              petRoutes);
+app.use("/api/appointments",      appointmentRoutes);
+app.use("/api/settings",          settingsRoutes);
+app.use("/api/applications",      applicationRoutes);
+app.use("/api/audit-logs",        auditLogRoutes);
+app.use("/api/volunteers",        volunteerRoutes);
 app.use("/api/shelter-care",      shelterCareRoutes);
 app.use("/api/medical",           medicalRoutes);
 app.use("/api/interviews",        interviewRoutes);
 app.use("/api/home-visits",       homeVisitRoutes);
 app.use("/api/risk-assessments",  riskAssessmentRoutes);
 app.use("/api/foster",            fosterRoutes);
+app.use("/api/monitoring-reports",monitoringReportRoutes);
+app.use("/api/baby-book",         babyBookRoutes);
+app.use("/api/events",            eventRoutes);
+app.use("/api/notifications",     notificationRoutes);
+app.use("/api/payments",          paymentRoutes);
+app.use("/api/event-assignments", eventAssignmentRoutes);
+app.use("/api/dashboard",         dashboardRoutes);
+app.use("/api/documents",         userDocumentRoutes);
+app.use("/api/adopter-profile",   adopterProfileRoutes);
+app.use("/api/emergency-reports", emergencyReportRoutes);
+app.use("/api/reports",           reportsRoutes);
 
+// ─── Inline chat routes ───────────────────────────────────────────────────────
 app.get(
   "/api/messages/:userId",
   protect,
@@ -92,11 +116,9 @@ app.get(
     try {
       const isAdmin = ["admin", "staff", "super_admin"].includes(req.user.role);
       const isOwnConversation = req.user._id.toString() === req.params.userId;
-
       if (!isAdmin && !isOwnConversation) {
         return res.status(403).json({ message: "You do not have permission to view these messages." });
       }
-
       const messages = await Message.find({ userId: req.params.userId }).sort({ createdAt: 1 });
       res.status(200).json(messages);
     } catch (error) {
@@ -114,12 +136,7 @@ app.get(
       const allUsers = await User.find({}).select("-password");
       const latestMessages = await Message.aggregate([
         { $sort: { createdAt: -1 } },
-        {
-          $group: {
-            _id: "$userId",
-            latestMessageAt: { $first: "$createdAt" },
-          },
-        },
+        { $group: { _id: "$userId", latestMessageAt: { $first: "$createdAt" } } },
         { $sort: { latestMessageAt: -1 } },
       ]);
 
@@ -128,7 +145,6 @@ app.get(
         .map((id) => allUsers.find((user) => user._id.toString() === id))
         .filter(Boolean);
       const inactiveUsers = allUsers.filter((user) => !activeUserIds.includes(user._id.toString()));
-
       res.status(200).json([...activeUsers, ...inactiveUsers]);
     } catch (error) {
       res.status(500).json({ message: error.message });
@@ -136,6 +152,7 @@ app.get(
   },
 );
 
+// ─── Error handlers (must come after all routes) ─────────────────────────────
 app.use((req, res) => {
   res.status(404).json({ message: "Route not found" });
 });
@@ -145,6 +162,7 @@ app.use((err, _req, res, _next) => {
   res.status(500).json({ message: "Something went wrong!" });
 });
 
+// ─── HTTP + Socket.IO server ──────────────────────────────────────────────────
 const connectDB = async () => {
   const conn = await mongoose.connect(process.env.MONGO_URI);
   console.log(`MongoDB Connected: ${conn.connection.host}`);
@@ -162,18 +180,12 @@ io.use(async (socket, next) => {
     const authHeader = socket.handshake.headers.authorization;
     const bearerToken = authHeader?.startsWith("Bearer ") ? authHeader.split(" ")[1] : null;
     const token = socket.handshake.auth?.token || bearerToken;
-
-    if (!token) {
-      return next(new Error("Authentication required"));
-    }
+    if (!token) return next(new Error("Authentication required"));
 
     const jwt = require("jsonwebtoken");
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     const user = await User.findById(decoded.id).select("-password");
-
-    if (!user) {
-      return next(new Error("User not found"));
-    }
+    if (!user) return next(new Error("User not found"));
 
     socket.user = user;
     return next();
@@ -187,7 +199,7 @@ io.on("connection", (socket) => {
 
   const isAdminUser = () => ["admin", "staff", "super_admin"].includes(socket.user.role);
 
-  // Auto-join the user's own private room on connect (fixes mobile not receiving messages)
+  // Auto-join the user's own private room on connect
   if (!isAdminUser()) {
     const ownRoom = socket.user._id.toString();
     socket.join(ownRoom);
@@ -196,37 +208,24 @@ io.on("connection", (socket) => {
 
   socket.on("joinRoom", (userId) => {
     const isOwnRoom = socket.user._id.toString() === userId;
-
-    if (!isAdminUser() && !isOwnRoom) {
-      return;
-    }
-
+    if (!isAdminUser() && !isOwnRoom) return;
     socket.join(userId);
     console.log(`User joined private room: ${userId}`);
   });
 
   socket.on("joinAdmin", () => {
-    if (!isAdminUser()) {
-      return;
-    }
-
+    if (!isAdminUser()) return;
     socket.join("admin_room");
     console.log("Admin joined the master admin_room");
   });
 
-socket.on("sendMessage", async (data) => {
-  try {
-    const isAdmin = isAdminUser();
-    const isOwnConversation = socket.user._id.toString() === data.userId;
+  socket.on("sendMessage", async (data) => {
+    try {
+      const isAdmin = isAdminUser();
+      const isOwnConversation = socket.user._id.toString() === data.userId;
+      if (!isAdmin && !isOwnConversation) return;
 
-    if (!isAdmin && !isOwnConversation) {
-      return;
-    }
-
-    // If user is sending for their own account, always record as "user"
-    // Only admin sending on behalf of others gets "shelter"
-    const sender = isOwnConversation ? "user" : "shelter";
-
+      const sender = isOwnConversation ? "user" : "shelter";
       const savedMessage = await Message.create({
         userId: data.userId,
         text: data.text,
@@ -234,9 +233,6 @@ socket.on("sendMessage", async (data) => {
         image: data.image || "",
       });
 
-      // Emit to the user's private room (mobile receives this)
-      // and to admin_room (all admin tabs receive this)
-      // The sender's own socket also gets it so both sides stay in sync
       io.to(data.userId).to("admin_room").emit("receiveMessage", savedMessage);
     } catch (error) {
       console.error("Error saving message:", error);
@@ -260,27 +256,3 @@ connectDB()
     console.error(`Error connecting to MongoDB: ${error.message}`);
     process.exit(1);
   });
-// ─── Feature routes added in latest build ─────────────────────────────────────
-const monitoringReportRoutes  = require("./routes/monitoringReportRoutes");
-const babyBookRoutes          = require("./routes/babyBookRoutes");
-const eventRoutes             = require("./routes/eventRoutes");
-const notificationRoutes      = require("./routes/notificationRoutes");
-const paymentRoutes           = require("./routes/paymentRoutes");
-const eventAssignmentRoutes   = require("./routes/eventAssignmentRoutes");
-const dashboardRoutes         = require("./routes/dashboardRoutes");
-const userDocumentRoutes      = require("./routes/userDocumentRoutes");
-const adopterProfileRoutes    = require("./routes/adopterProfileRoutes");
-const emergencyReportRoutes   = require("./routes/emergencyReportRoutes");
-const reportsRoutes           = require("./routes/reportsRoutes");
-
-app.use("/api/monitoring-reports",  monitoringReportRoutes);
-app.use("/api/baby-book",           babyBookRoutes);
-app.use("/api/events",              eventRoutes);
-app.use("/api/notifications",       notificationRoutes);
-app.use("/api/payments",            paymentRoutes);
-app.use("/api/event-assignments",   eventAssignmentRoutes);
-app.use("/api/dashboard",           dashboardRoutes);
-app.use("/api/documents",           userDocumentRoutes);
-app.use("/api/adopter-profile",     adopterProfileRoutes);
-app.use("/api/emergency-reports",   emergencyReportRoutes);
-app.use("/api/reports",             reportsRoutes);

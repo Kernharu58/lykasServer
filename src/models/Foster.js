@@ -1,5 +1,8 @@
 const mongoose = require("mongoose");
 
+const MIN_FOSTER_TRIAL_DAYS = 30;
+const MAX_FOSTER_TRIAL_DAYS = 60;
+
 // ── Active Foster Placement ────────────────────────────────────────────────────
 const fosterSchema = new mongoose.Schema(
   {
@@ -23,6 +26,18 @@ const fosterSchema = new mongoose.Schema(
     startDate:  { type: Date, required: true },
     endDate:    { type: Date, default: null }, // null = still active
     expectedEndDate: { type: Date, default: null },
+
+    // ── Foster Trial Tracking (pseudocode §1) ──────────────────────────────
+    trialDurationDays:       { type: Number, default: null },          // 30–60
+    weeklyReportsRequired:   { type: Number, default: null },          // ceil(days/7)
+    weeklyReportsSubmitted:  { type: Number, default: 0 },
+    outcome: {
+      type: String,
+      enum: ["ADOPTED", "RETURNED", "EXTENDED", null],
+      default: null,
+    },
+    staffNotes:    { type: String, trim: true },
+    closedAt:      { type: Date, default: null },
 
     status: {
       type: String,
@@ -103,4 +118,6 @@ const fosterReportSchema = new mongoose.Schema(
 module.exports = {
   Foster:       mongoose.model("Foster",       fosterSchema),
   FosterReport: mongoose.model("FosterReport", fosterReportSchema),
+  MIN_FOSTER_TRIAL_DAYS,
+  MAX_FOSTER_TRIAL_DAYS,
 };

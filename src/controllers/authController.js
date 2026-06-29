@@ -478,7 +478,8 @@ const getFavorites = async (req, res) => {
 const getMe = async (req, res) => {
   try {
     const user = await User.findById(req.user._id).select("-password");
-    res.status(200).json(user);
+    // BUG FIX: Wrap in { user } for consistent response shape across all clients
+    res.status(200).json({ user });
   } catch (error) {
     res.status(500).json({ message: "Server error", error: error.message });
   }

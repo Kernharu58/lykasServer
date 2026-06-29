@@ -32,7 +32,14 @@ const paymongoRequest = async (method, path, body = null) => {
 // { type: "adoption_fee"|"donation", amount, description, refModel, refId, successUrl, cancelUrl }
 const createCheckout = async (req, res) => {
   try {
-    const { type, amount, description, refModel, refId, successUrl, cancelUrl } = req.body;
+    // FIX (Critical #1): Accept optional paymentMethod from the client to pre-select in checkout
+    const { type, amount, description, refModel, refId, successUrl, cancelUrl, paymentMethod } = req.body;
+    
+    // Map client method key to PayMongo accepted values; fall back to all methods
+    const VALID_METHODS = ["gcash", "card", "paymaya", "grab_pay"];
+    const selectedMethods = paymentMethod && VALID_METHODS.includes(paymentMethod)
+      ? [paymentMethod]
+      : ["gcash", "card", "paymaya", "grab_pay"];
 
     if (!amount || amount <= 0) {
       return res.status(400).json({ message: "Amount must be greater than 0" });
@@ -52,7 +59,7 @@ const createCheckout = async (req, res) => {
             name:        description || (type === "donation" ? "Donation to Lykas Shelter" : "Adoption Fee"),
             quantity:    1,
           }],
-          payment_method_types: ["gcash", "card", "paymaya", "grab_pay"],
+          payment_method_types: selectedMethods,
           success_url: successUrl || `${process.env.FRONTEND_URL}/payment/success`,
           cancel_url:  cancelUrl  || `${process.env.FRONTEND_URL}/payment/cancel`,
           description: description || "",

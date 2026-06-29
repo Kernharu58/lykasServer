@@ -25,13 +25,31 @@ const allowedOrigins = (process.env.FRONTEND_URL || "")
 
 app.set("trust proxy", 1);
 
+// BUG FIX: In development, allow localhost even if FRONTEND_URL not set
+const isDev = process.env.NODE_ENV !== "production";
+const devOrigins = ["http://localhost:3000", "http://localhost:5173", "http://127.0.0.1:3000"];
+
 app.use(cors({
   origin: (origin, callback) => {
-    if (!origin || allowedOrigins.length === 0 || allowedOrigins.includes(origin)) {
-      return callback(null, true);
+    // Allow requests with no origin (mobile apps, curl, Postman)
+    if (!origin) return callback(null, true);
+    
+    // In production, enforce allowedOrigins whitelist
+    if (!isDev && allowedOrigins.length > 0) {
+      if (allowedOrigins.includes(origin)) return callback(null, true);
+      return callback(new Error("Not allowed by CORS"));
     }
+    
+    // In development or if no origins configured, allow all + dev origins
+    if (isDev || allowedOrigins.length === 0) {
+      if ([...allowedOrigins, ...devOrigins].includes(origin)) return callback(null, true);
+      // Allow any origin in dev
+      if (isDev) return callback(null, true);
+    }
+    
     return callback(new Error("Not allowed by CORS"));
   },
+  credentials: true,
 }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -171,8 +189,13 @@ const connectDB = async () => {
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: allowedOrigins.length > 0 ? allowedOrigins : "*",
+    // BUG FIX: Match main CORS settings - use allowedOrigins or allow all in dev
+    origin: (allowedOrigins.length > 0 && process.env.NODE_ENV === "production")
+      ? allowedOrigins
+      : "*",
+    credentials: true,
   },
+  transports: ["websocket", "polling"],
 });
 
 io.use(async (socket, next) => {

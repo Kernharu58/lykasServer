@@ -1,21 +1,26 @@
 const cron = require("node-cron");
-const axios = require("axios");
+const https = require("https");
+const http = require("http");
 const { Foster } = require("./models/Foster");
 
 const BACKEND_URL = process.env.BACKEND_URL || "https://your-app.onrender.com";
 
 // ── Ping every 14 minutes to prevent Render free tier from sleeping ────────────
-cron.schedule("*/14 * * * *", async () => {
-  try {
-    const res = await axios.get(`${BACKEND_URL}/health`);
-    console.log(`[CRON - PING] ${new Date().toISOString()} - Status: ${res.status} ✅`);
-  } catch (err) {
-    console.error(`[CRON - PING] ${new Date().toISOString()} - Failed: ${err.message} ❌`);
-  }
-});
+// BUG FIX: Use native http/https instead of axios (removed from dependencies)
+const pingServer = () => {
+  const url = new URL(`${BACKEND_URL}/health`);
+  const client = url.protocol === "https:" ? https : http;
 
-// ── Daily: Flag overdue foster trials (pseudocode §1: checkOverdueFosterTrials) ─
-// Runs at midnight daily
+  client.get(url.toString(), (res) => {
+    console.log(`[CRON - PING] ${new Date().toISOString()} - Status: ${res.statusCode} ✅`);
+  }).on("error", (err) => {
+    console.error(`[CRON - PING] ${new Date().toISOString()} - Failed: ${err.message} ❌`);
+  });
+};
+
+cron.schedule("*/14 * * * *", pingServer);
+
+// ── Daily: Flag overdue foster trials ─────────────────────────────────────────
 cron.schedule("0 0 * * *", async () => {
   const label = `[CRON - FOSTER TRIALS] ${new Date().toISOString()}`;
   try {
@@ -26,7 +31,7 @@ cron.schedule("0 0 * * *", async () => {
     }).populate("fosterer", "displayName email").populate("pet", "name");
 
     if (overdue.length > 0) {
-      console.log(`${label} - ${overdue.length} foster trial(s) overdue — staff notification triggered`);
+      console.log(`${label} - ${overdue.length} foster trial(s) overdue`);
       for (const foster of overdue) {
         try {
           const { notify } = require("./utils/notificationHelper");
@@ -50,12 +55,11 @@ cron.schedule("0 0 * * *", async () => {
   }
 });
 
-// ── Daily: Cleanup and other scheduled tasks ──────────────────────────────────
+// ── Daily cleanup ──────────────────────────────────────────────────────────────
 cron.schedule("0 1 * * *", async () => {
   const label = `[CRON - DAILY] ${new Date().toISOString()}`;
   try {
     console.log(`${label} - Running daily cleanup...`);
-    // Example: await User.deleteMany({ isVerified: false, createdAt: { $lt: threeDaysAgo } });
     console.log(`${label} - Done ✅`);
   } catch (err) {
     console.error(`${label} - Failed:`, err.message);

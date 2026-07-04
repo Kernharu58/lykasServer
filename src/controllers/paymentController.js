@@ -25,11 +25,11 @@ const paymongoRequest = async (method, path, body = null) => {
 };
 
 // ═══════════════════════════════════════════════════════════
-// CREATE CHECKOUT LINK (adoption fee or donation)
+// CREATE CHECKOUT LINK (donation)
 // ═══════════════════════════════════════════════════════════
 
 // POST /api/payments/create-checkout
-// { type: "adoption_fee"|"donation", amount, description, refModel, refId, successUrl, cancelUrl }
+// { type: "donation", amount, description, refModel, refId, successUrl, cancelUrl }
 const createCheckout = async (req, res) => {
   try {
     // FIX (Critical #1): Accept optional paymentMethod from the client to pre-select in checkout
@@ -56,7 +56,7 @@ const createCheckout = async (req, res) => {
           line_items: [{
             currency:    "PHP",
             amount:      amountInCentavos,
-            name:        description || (type === "donation" ? "Donation to Lykas Shelter" : "Adoption Fee"),
+            name:        description || "Donation to Lykas Shelter",
             quantity:    1,
           }],
           payment_method_types: selectedMethods,
@@ -156,7 +156,7 @@ const handleWebhook = async (req, res) => {
         recipient: payment.paidBy,
         type:      "PAYMENT_RECEIVED",
         title:     "Payment Confirmed ✅",
-        message:   `Your ${payment.type === "donation" ? "donation" : "adoption fee"} of ₱${(payment.amount / 100).toFixed(2)} was received successfully.`,
+        message:   `Your donation of ₱${(payment.amount / 100).toFixed(2)} was received successfully.`,
         refModel:  "Payment",
         refId:     payment._id,
       });
@@ -203,7 +203,7 @@ const getMyPayments = async (req, res) => {
   try {
     const { type, status, page = 1, limit = 20 } = req.query;
     const filter = { paidBy: req.user._id };
-    if (type   && ["adoption_fee","donation"].includes(type))       filter.type   = type;
+    if (type   && ["donation"].includes(type))       filter.type   = type;
     if (status && ["pending","paid","failed","refunded"].includes(status)) filter.status = status;
 
     const skip = (Number(page) - 1) * Number(limit);
@@ -241,7 +241,7 @@ const getAllPayments = async (req, res) => {
   try {
     const { type, status, page = 1, limit = 20 } = req.query;
     const filter = {};
-    if (type   && ["adoption_fee","donation"].includes(type))       filter.type   = type;
+    if (type   && ["donation"].includes(type))       filter.type   = type;
     if (status && ["pending","paid","failed","refunded"].includes(status)) filter.status = status;
 
     const skip = (Number(page) - 1) * Number(limit);
@@ -278,13 +278,9 @@ const getPaymentById = async (req, res) => {
 // GET /api/payments/summary  (admin dashboard totals)
 const getPaymentSummary = async (req, res) => {
   try {
-    const [totalDonations, totalAdoptionFees, pending, failed] = await Promise.all([
+    const [totalDonations, pending, failed] = await Promise.all([
       Payment.aggregate([
         { $match: { type: "donation", status: "paid" } },
-        { $group: { _id: null, total: { $sum: "$amount" } } },
-      ]),
-      Payment.aggregate([
-        { $match: { type: "adoption_fee", status: "paid" } },
         { $group: { _id: null, total: { $sum: "$amount" } } },
       ]),
       Payment.countDocuments({ status: "pending" }),
@@ -293,7 +289,6 @@ const getPaymentSummary = async (req, res) => {
 
     res.status(200).json({
       totalDonations:    (totalDonations[0]?.total    || 0) / 100,
-      totalAdoptionFees: (totalAdoptionFees[0]?.total || 0) / 100,
       pendingPayments:   pending,
       failedPayments:    failed,
     });

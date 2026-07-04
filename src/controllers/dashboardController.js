@@ -45,7 +45,7 @@ const getDashboard = async (req, res) => {
       activeFosters,
 
       // Payments
-      totalDonations, totalAdoptionFees,
+      totalDonations,
 
       // Alerts
       flaggedHealthChecks, flaggedMonitoring,
@@ -76,7 +76,6 @@ const getDashboard = async (req, res) => {
       Foster.countDocuments({ status: "active" }),
 
       Payment.aggregate([{ $match: { type: "donation",      status: "paid" } }, { $group: { _id: null, total: { $sum: "$amount" } } }]),
-      Payment.aggregate([{ $match: { type: "adoption_fee",  status: "paid" } }, { $group: { _id: null, total: { $sum: "$amount" } } }]),
 
       HealthCheck.countDocuments({ flagged: true, createdAt: { $gte: last30 } }),
       MonitoringReport.countDocuments({ status: "flagged" }),
@@ -110,7 +109,6 @@ const getDashboard = async (req, res) => {
       pipeline: { scheduledInterviews, scheduledHomeVisits, activeFosters },
       financials: {
         totalDonations:    (totalDonations[0]?.total    || 0) / 100,
-        totalAdoptionFees: (totalAdoptionFees[0]?.total || 0) / 100,
       },
       alerts: {
         flaggedHealthChecks,

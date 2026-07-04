@@ -83,13 +83,9 @@ const financialReport = async (req, res) => {
   try {
     const range = getRange(req.query.from, req.query.to);
 
-    const [totalDonations, totalFees, byMonth, byMethod, recentPayments] = await Promise.all([
+    const [totalDonations, byMonth, byMethod, recentPayments] = await Promise.all([
       Payment.aggregate([
         { $match: { type: "donation", status: "paid", paidAt: range } },
-        { $group: { _id: null, total: { $sum: "$amount" }, count: { $sum: 1 } } },
-      ]),
-      Payment.aggregate([
-        { $match: { type: "adoption_fee", status: "paid", paidAt: range } },
         { $group: { _id: null, total: { $sum: "$amount" }, count: { $sum: 1 } } },
       ]),
       Payment.aggregate([
@@ -115,10 +111,8 @@ const financialReport = async (req, res) => {
     res.status(200).json({
       summary: {
         totalDonations:    (totalDonations[0]?.total    || 0) / 100,
-        totalAdoptionFees: (totalFees[0]?.total || 0)          / 100,
-        totalRevenue:      ((totalDonations[0]?.total || 0) + (totalFees[0]?.total || 0)) / 100,
+        totalRevenue:      (totalDonations[0]?.total || 0) / 100,
         donationCount:     totalDonations[0]?.count  || 0,
-        feeCount:          totalFees[0]?.count || 0,
       },
       byMonth,
       byMethod,

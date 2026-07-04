@@ -10,7 +10,7 @@ const paymentSchema = new mongoose.Schema(
     },
     type: {
       type: String,
-      enum: ["adoption_fee", "donation"],
+      enum: ["donation"],
       required: true,
       index: true,
     },

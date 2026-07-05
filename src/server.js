@@ -33,20 +33,20 @@ app.use(cors({
   origin: (origin, callback) => {
     // Allow requests with no origin (mobile apps, curl, Postman)
     if (!origin) return callback(null, true);
-    
+
     // In production, enforce allowedOrigins whitelist
     if (!isDev && allowedOrigins.length > 0) {
       if (allowedOrigins.includes(origin)) return callback(null, true);
       return callback(new Error("Not allowed by CORS"));
     }
-    
+
     // In development or if no origins configured, allow all + dev origins
     if (isDev || allowedOrigins.length === 0) {
       if ([...allowedOrigins, ...devOrigins].includes(origin)) return callback(null, true);
       // Allow any origin in dev
       if (isDev) return callback(null, true);
     }
-    
+
     return callback(new Error("Not allowed by CORS"));
   },
   credentials: true,
@@ -74,7 +74,7 @@ app.get("/", (_req, res) => {
   res.send("CarePaws API is running...");
 });
 
-// ─── All routes registered BEFORE server starts (BUG FIX) ────────────────────
+// ─── All routes registered BEFORE server starts ───────────────────────────────
 const authRoutes             = require("./routes/authRoutes");
 const petRoutes              = require("./routes/petRoutes");
 const appointmentRoutes      = require("./routes/appointmentRoutes");
@@ -99,6 +99,7 @@ const userDocumentRoutes     = require("./routes/userDocumentRoutes");
 const adopterProfileRoutes   = require("./routes/adopterProfileRoutes");
 const emergencyReportRoutes  = require("./routes/emergencyReportRoutes");
 const reportsRoutes          = require("./routes/reportsRoutes");
+const inKindDonationRoutes   = require("./routes/inKindDonationRoutes"); // ✅ FIX Bug 1
 const { protect, restrictTo } = require("./middleware/authMiddleware");
 
 app.use("/api/auth",              authRoutes);
@@ -125,6 +126,7 @@ app.use("/api/documents",         userDocumentRoutes);
 app.use("/api/adopter-profile",   adopterProfileRoutes);
 app.use("/api/emergency-reports", emergencyReportRoutes);
 app.use("/api/reports",           reportsRoutes);
+app.use("/api/donations/goods",   inKindDonationRoutes); // ✅ FIX Bug 1
 
 // ─── Inline chat routes ───────────────────────────────────────────────────────
 app.get(
@@ -189,7 +191,6 @@ const connectDB = async () => {
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    // BUG FIX: Match main CORS settings - use allowedOrigins or allow all in dev
     origin: (allowedOrigins.length > 0 && process.env.NODE_ENV === "production")
       ? allowedOrigins
       : "*",

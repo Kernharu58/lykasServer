@@ -320,6 +320,41 @@ const updateApplicationStatus = async (req, res) => {
   }
 };
 
+
+// ─── ADMIN: Add internal note to an application ───────────────────────────────
+// POST /api/applications/:id/notes  { text: '...' }
+const addInternalNote = async (req, res) => {
+  try {
+    const { text } = req.body;
+    if (!text || !text.trim()) {
+      return res.status(400).json({ message: 'Note text is required' });
+    }
+    const application = await Application.findById(req.params.id);
+    if (!application) {
+      return res.status(404).json({ message: 'Application not found' });
+    }
+    application.internalNotes.push({ author: req.user._id, text: text.trim() });
+    await application.save();
+    await application.populate('internalNotes.author', 'displayName email');
+    res.status(201).json({ message: 'Note added', notes: application.internalNotes });
+  } catch (error) {
+    res.status(500).json({ message: 'Server Error', error: error.message });
+  }
+};
+
+// ─── ADMIN: Get internal notes ────────────────────────────────────────────────
+// GET /api/applications/:id/notes
+const getInternalNotes = async (req, res) => {
+  try {
+    const application = await Application.findById(req.params.id)
+      .populate('internalNotes.author', 'displayName email');
+    if (!application) return res.status(404).json({ message: 'Application not found' });
+    res.status(200).json({ notes: application.internalNotes });
+  } catch (error) {
+    res.status(500).json({ message: 'Server Error', error: error.message });
+  }
+};
+
 module.exports = {
   getMyApplications,
   getApplicationById,
@@ -327,4 +362,49 @@ module.exports = {
   getAllApplications,
   updateApplicationStatus,
   autoRejectApplication,
+};
+// ─── ADMIN: Add internal note to an application ───────────────────────────────
+// POST /api/applications/:id/notes  { text: "..." }
+const addInternalNote = async (req, res) => {
+  try {
+    const { text } = req.body;
+    if (!text || !text.trim()) {
+      return res.status(400).json({ message: "Note text is required" });
+    }
+
+    const application = await Application.findById(req.params.id);
+    if (!application) {
+      return res.status(404).json({ message: "Application not found" });
+    }
+
+    application.internalNotes.push({
+      author: req.user._id,
+      text: text.trim(),
+    });
+    await application.save();
+
+    await application.populate("internalNotes.author", "displayName email");
+
+    res.status(201).json({
+      message: "Note added",
+      notes: application.internalNotes,
+    });
+  } catch (error) {
+    res.status(500).json({ message: "Server Error", error: error.message });
+  }
+};
+
+// ─── ADMIN: Get internal notes for an application ────────────────────────────
+// GET /api/applications/:id/notes
+const getInternalNotes = async (req, res) => {
+  try {
+    const application = await Application.findById(req.params.id)
+      .populate("internalNotes.author", "displayName email");
+    if (!application) {
+      return res.status(404).json({ message: "Application not found" });
+    }
+    res.status(200).json({ notes: application.internalNotes });
+  } catch (error) {
+    res.status(500).json({ message: "Server Error", error: error.message });
+  }
 };

@@ -3,31 +3,32 @@ const mongoose = require("mongoose");
 const petSchema = new mongoose.Schema(
   {
     name: { type: String, required: true },
-    // 👉 FIX: Added "Other" to the allowed species
-    species: { type: String, enum: ["Dog", "Cat", "Other"], required: true }, 
+    species: { type: String, enum: ["Dog", "Cat", "Other"], required: true },
     breed: { type: String, required: true },
-    age: { type: String, required: true }, 
+    age: { type: String, required: true },
     gender: { type: String, enum: ["Male", "Female"], required: true },
-    
-    // 👉 FIX: Added the 'size' field to catch the frontend dropdown data
-    size: { type: String, enum: ["Small", "Medium", "Large"] }, 
-    weight: { type: String }, 
-    
-    // 👉 FIX: Removed 'required: true' so it doesn't crash if omitted, and gave it a fallback default
-    healthStatus: { type: String, default: "See description for medical notes" }, 
-    
+    size: { type: String, enum: ["Small", "Medium", "Large"] },
+    weight: { type: String },
+    temperament: {
+      type: String,
+      enum: ["Calm", "Playful", "Shy", "Energetic", "Affectionate", "Independent"],
+    },
+    energyLevel: {
+      type: String,
+      enum: ["Low", "Medium", "High"],
+    },
+    healthStatus: { type: String, default: "See description for medical notes" },
     description: { type: String, required: true },
-    imageUrl: { type: String, required: true }, 
+    imageUrl: { type: String, required: true },
     status: {
       type: String,
-      // 👉 FIX: Added "Foster" status so foster placements don't fail validation
       enum: ["Available", "Pending", "Adopted", "Foster"],
       default: "Available",
     },
     owner: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
-      default: null, 
+      default: null,
     },
   },
   { timestamps: true },

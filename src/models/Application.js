@@ -27,6 +27,18 @@ const applicationSchema = new mongoose.Schema(
       required: true,
       trim: true,
     },
+    householdSize: {
+      type: Number,
+      default: null,
+    },
+    isRenting: {
+      type: Boolean,
+      default: false,
+    },
+    landlordApproval: {
+      type: Boolean,
+      default: false,
+    },
     // 'adoption' (default) or 'foster'
     type: {
       type: String,
@@ -55,6 +67,14 @@ const applicationSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    // Internal coordinator notes — hidden from applicant
+    internalNotes: [
+      {
+        author: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+        text: { type: String, trim: true },
+        createdAt: { type: Date, default: Date.now },
+      },
+    ],
   },
   { timestamps: true },
 );

@@ -16,28 +16,14 @@ const createAuditLog = async ({ actor, action, targetUser, metadata }) => {
 // @route   GET /api/pets
 const getPets = async (req, res) => {
   try {
-    // 1. Grab filters from the URL query
-    const { category, search } = req.query;
-
-    // 2. Base query: Only show pets that are Available or Pending
-    let query = { 
-      status: { $in: ["Available", "Pending"] } 
-    };
-
-    // 3. Filter by category (mapped to 'species' in DB)
-    if (category && category !== 'All') {
-      query.species = category; 
-    }
-
-    // 4. Keyword search across 'name' and 'breed'
-    if (search) {
-      query.$or = [
-        { name: { $regex: search, $options: 'i' } }, // Case-insensitive
-        { breed: { $regex: search, $options: 'i' } }
-      ];
-    }
-
-    // 5. Execute search
+    const { category, search, size, age, temperament, energyLevel } = req.query;
+    let query = { status: { $in: ["Available", "Pending"] } };
+    if (category && category !== 'All') query.species = category;
+    if (size && size !== 'All') query.size = size;
+    if (age && age !== 'All') query.age = { $regex: age, $options: 'i' };
+    if (temperament && temperament !== 'All') query.temperament = temperament;
+    if (energyLevel && energyLevel !== 'All') query.energyLevel = energyLevel;
+    if (search) query.$or = [{ name: { $regex: search, $options: 'i' } }, { breed: { $regex: search, $options: 'i' } }];
     const pets = await Pet.find(query);
     res.status(200).json(pets);
   } catch (error) {
@@ -113,7 +99,7 @@ const getMyPets = async (req, res) => {
 // Body: { phone, address, experience, type?, fosterPeriod? }
 const adoptPet = async (req, res) => {
   try {
-    const { phone, address, experience, type = "adoption", fosterPeriod } = req.body;
+    const { phone, address, experience, type = "adoption", fosterPeriod, householdSize, isRenting, landlordApproval } = req.body;
     const pet = await Pet.findById(req.params.id);
 
     if (!pet) return res.status(404).json({ message: "Pet not found" });
@@ -143,6 +129,9 @@ const adoptPet = async (req, res) => {
       phone,
       address,
       experience,
+      householdSize: householdSize ? parseInt(householdSize) : null,
+      isRenting: Boolean(isRenting),
+      landlordApproval: Boolean(landlordApproval),
       type,
       fosterPeriod: type === "foster" ? (fosterPeriod || null) : null,
     });

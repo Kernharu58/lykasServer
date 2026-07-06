@@ -25,32 +25,34 @@ const allowedOrigins = (process.env.FRONTEND_URL || "")
 
 app.set("trust proxy", 1);
 
-// BUG FIX: In development, allow localhost even if FRONTEND_URL not set
 const isDev = process.env.NODE_ENV !== "production";
-const devOrigins = ["http://localhost:3000", "http://localhost:5173", "http://127.0.0.1:3000"];
+const devOrigins = [
+  "http://localhost:3000",
+  "http://localhost:5173",
+  "http://127.0.0.1:3000",
+];
 
-app.use(cors({
-  origin: (origin, callback) => {
-    // Allow requests with no origin (mobile apps, curl, Postman)
-    if (!origin) return callback(null, true);
-    
-    // In production, enforce allowedOrigins whitelist
-    if (!isDev && allowedOrigins.length > 0) {
-      if (allowedOrigins.includes(origin)) return callback(null, true);
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      if (!origin) return callback(null, true);
+
+      if (!isDev && allowedOrigins.length > 0) {
+        if (allowedOrigins.includes(origin)) return callback(null, true);
+        return callback(new Error("Not allowed by CORS"));
+      }
+
+      if (isDev || allowedOrigins.length === 0) {
+        if ([...allowedOrigins, ...devOrigins].includes(origin))
+          return callback(null, true);
+        if (isDev) return callback(null, true);
+      }
+
       return callback(new Error("Not allowed by CORS"));
-    }
-    
-    // In development or if no origins configured, allow all + dev origins
-    if (isDev || allowedOrigins.length === 0) {
-      if ([...allowedOrigins, ...devOrigins].includes(origin)) return callback(null, true);
-      // Allow any origin in dev
-      if (isDev) return callback(null, true);
-    }
-    
-    return callback(new Error("Not allowed by CORS"));
-  },
-  credentials: true,
-}));
+    },
+    credentials: true,
+  }),
+);
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(helmet());
@@ -74,76 +76,80 @@ app.get("/", (_req, res) => {
   res.send("CarePaws API is running...");
 });
 
-// ─── All routes registered BEFORE server starts (BUG FIX) ────────────────────
-const authRoutes             = require("./routes/authRoutes");
-const petRoutes              = require("./routes/petRoutes");
-const appointmentRoutes      = require("./routes/appointmentRoutes");
-const settingsRoutes         = require("./routes/settingsRoutes");
-const applicationRoutes      = require("./routes/applicationRoutes");
-const auditLogRoutes         = require("./routes/auditLogRoutes");
-const volunteerRoutes        = require("./routes/volunteerRoutes");
-const shelterCareRoutes      = require("./routes/shelterCareRoutes");
-const medicalRoutes          = require("./routes/medicalRecordRoutes");
-const interviewRoutes        = require("./routes/interviewRoutes");
-const homeVisitRoutes        = require("./routes/homeVisitRoutes");
-const riskAssessmentRoutes   = require("./routes/riskAssessmentRoutes");
-const fosterRoutes           = require("./routes/fosterRoutes");
+// ─── Routes ───────────────────────────────────────────────────────────────────
+const authRoutes = require("./routes/authRoutes");
+const petRoutes = require("./routes/petRoutes");
+const appointmentRoutes = require("./routes/appointmentRoutes");
+const settingsRoutes = require("./routes/settingsRoutes");
+const applicationRoutes = require("./routes/applicationRoutes");
+const auditLogRoutes = require("./routes/auditLogRoutes");
+const volunteerRoutes = require("./routes/volunteerRoutes");
+const shelterCareRoutes = require("./routes/shelterCareRoutes");
+const medicalRoutes = require("./routes/medicalRecordRoutes");
+const interviewRoutes = require("./routes/interviewRoutes");
+const homeVisitRoutes = require("./routes/homeVisitRoutes");
+const riskAssessmentRoutes = require("./routes/riskAssessmentRoutes");
+const fosterRoutes = require("./routes/fosterRoutes");
 const monitoringReportRoutes = require("./routes/monitoringReportRoutes");
-const babyBookRoutes         = require("./routes/babyBookRoutes");
-const eventRoutes            = require("./routes/eventRoutes");
-const notificationRoutes     = require("./routes/notificationRoutes");
-const paymentRoutes          = require("./routes/paymentRoutes");
-const eventAssignmentRoutes  = require("./routes/eventAssignmentRoutes");
-const dashboardRoutes        = require("./routes/dashboardRoutes");
-const userDocumentRoutes     = require("./routes/userDocumentRoutes");
-const adopterProfileRoutes   = require("./routes/adopterProfileRoutes");
-const emergencyReportRoutes  = require("./routes/emergencyReportRoutes");
-const reportsRoutes          = require("./routes/reportsRoutes");
+const babyBookRoutes = require("./routes/babyBookRoutes");
+const eventRoutes = require("./routes/eventRoutes");
+const notificationRoutes = require("./routes/notificationRoutes");
+const paymentRoutes = require("./routes/paymentRoutes");
+const eventAssignmentRoutes = require("./routes/eventAssignmentRoutes");
+const dashboardRoutes = require("./routes/dashboardRoutes");
+const userDocumentRoutes = require("./routes/userDocumentRoutes");
+const adopterProfileRoutes = require("./routes/adopterProfileRoutes");
+const emergencyReportRoutes = require("./routes/emergencyReportRoutes");
+const reportsRoutes = require("./routes/reportsRoutes");
+const inKindDonationRoutes = require("./routes/inKindDonationRoutes"); // ✅ Bug 1 fix
 const { protect, restrictTo } = require("./middleware/authMiddleware");
 
-app.use("/api/auth",              authRoutes);
-app.use("/api/pets",              petRoutes);
-app.use("/api/appointments",      appointmentRoutes);
-app.use("/api/settings",          settingsRoutes);
-app.use("/api/applications",      applicationRoutes);
-app.use("/api/audit-logs",        auditLogRoutes);
-app.use("/api/volunteers",        volunteerRoutes);
-app.use("/api/shelter-care",      shelterCareRoutes);
-app.use("/api/medical",           medicalRoutes);
-app.use("/api/interviews",        interviewRoutes);
-app.use("/api/home-visits",       homeVisitRoutes);
-app.use("/api/risk-assessments",  riskAssessmentRoutes);
-app.use("/api/foster",            fosterRoutes);
-app.use("/api/monitoring-reports",monitoringReportRoutes);
-app.use("/api/baby-book",         babyBookRoutes);
-app.use("/api/events",            eventRoutes);
-app.use("/api/notifications",     notificationRoutes);
-app.use("/api/payments",          paymentRoutes);
+app.use("/api/auth", authRoutes);
+app.use("/api/pets", petRoutes);
+app.use("/api/appointments", appointmentRoutes);
+app.use("/api/settings", settingsRoutes);
+app.use("/api/applications", applicationRoutes);
+app.use("/api/audit-logs", auditLogRoutes);
+app.use("/api/volunteers", volunteerRoutes);
+app.use("/api/shelter-care", shelterCareRoutes);
+app.use("/api/medical", medicalRoutes);
+app.use("/api/interviews", interviewRoutes);
+app.use("/api/home-visits", homeVisitRoutes);
+app.use("/api/risk-assessments", riskAssessmentRoutes);
+app.use("/api/foster", fosterRoutes);
+app.use("/api/monitoring-reports", monitoringReportRoutes);
+app.use("/api/baby-book", babyBookRoutes);
+app.use("/api/events", eventRoutes);
+app.use("/api/notifications", notificationRoutes);
+app.use("/api/payments", paymentRoutes);
 app.use("/api/event-assignments", eventAssignmentRoutes);
-app.use("/api/dashboard",         dashboardRoutes);
-app.use("/api/documents",         userDocumentRoutes);
-app.use("/api/adopter-profile",   adopterProfileRoutes);
+app.use("/api/dashboard", dashboardRoutes);
+app.use("/api/documents", userDocumentRoutes);
+app.use("/api/adopter-profile", adopterProfileRoutes);
 app.use("/api/emergency-reports", emergencyReportRoutes);
-app.use("/api/reports",           reportsRoutes);
+app.use("/api/reports", reportsRoutes);
+app.use("/api/donations/goods", inKindDonationRoutes); // ✅ Bug 1 fix
 
 // ─── Inline chat routes ───────────────────────────────────────────────────────
-app.get(
-  "/api/messages/:userId",
-  protect,
-  async (req, res) => {
-    try {
-      const isAdmin = ["admin", "staff", "super_admin"].includes(req.user.role);
-      const isOwnConversation = req.user._id.toString() === req.params.userId;
-      if (!isAdmin && !isOwnConversation) {
-        return res.status(403).json({ message: "You do not have permission to view these messages." });
-      }
-      const messages = await Message.find({ userId: req.params.userId }).sort({ createdAt: 1 });
-      res.status(200).json(messages);
-    } catch (error) {
-      res.status(500).json({ message: error.message });
+app.get("/api/messages/:userId", protect, async (req, res) => {
+  try {
+    const isAdmin = ["admin", "staff", "super_admin"].includes(req.user.role);
+    const isOwnConversation = req.user._id.toString() === req.params.userId;
+    if (!isAdmin && !isOwnConversation) {
+      return res
+        .status(403)
+        .json({
+          message: "You do not have permission to view these messages.",
+        });
     }
-  },
-);
+    const messages = await Message.find({ userId: req.params.userId }).sort({
+      createdAt: 1,
+    });
+    res.status(200).json(messages);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
 
 app.get(
   "/api/chat-sessions",
@@ -154,7 +160,9 @@ app.get(
       const allUsers = await User.find({}).select("-password");
       const latestMessages = await Message.aggregate([
         { $sort: { createdAt: -1 } },
-        { $group: { _id: "$userId", latestMessageAt: { $first: "$createdAt" } } },
+        {
+          $group: { _id: "$userId", latestMessageAt: { $first: "$createdAt" } },
+        },
         { $sort: { latestMessageAt: -1 } },
       ]);
 
@@ -162,7 +170,9 @@ app.get(
       const activeUsers = activeUserIds
         .map((id) => allUsers.find((user) => user._id.toString() === id))
         .filter(Boolean);
-      const inactiveUsers = allUsers.filter((user) => !activeUserIds.includes(user._id.toString()));
+      const inactiveUsers = allUsers.filter(
+        (user) => !activeUserIds.includes(user._id.toString()),
+      );
       res.status(200).json([...activeUsers, ...inactiveUsers]);
     } catch (error) {
       res.status(500).json({ message: error.message });
@@ -189,10 +199,10 @@ const connectDB = async () => {
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    // BUG FIX: Match main CORS settings - use allowedOrigins or allow all in dev
-    origin: (allowedOrigins.length > 0 && process.env.NODE_ENV === "production")
-      ? allowedOrigins
-      : "*",
+    origin:
+      allowedOrigins.length > 0 && process.env.NODE_ENV === "production"
+        ? allowedOrigins
+        : "*",
     credentials: true,
   },
   transports: ["websocket", "polling"],
@@ -201,7 +211,9 @@ const io = new Server(server, {
 io.use(async (socket, next) => {
   try {
     const authHeader = socket.handshake.headers.authorization;
-    const bearerToken = authHeader?.startsWith("Bearer ") ? authHeader.split(" ")[1] : null;
+    const bearerToken = authHeader?.startsWith("Bearer ")
+      ? authHeader.split(" ")[1]
+      : null;
     const token = socket.handshake.auth?.token || bearerToken;
     if (!token) return next(new Error("Authentication required"));
 
@@ -220,9 +232,9 @@ io.use(async (socket, next) => {
 io.on("connection", (socket) => {
   console.log("User connected:", socket.id);
 
-  const isAdminUser = () => ["admin", "staff", "super_admin"].includes(socket.user.role);
+  const isAdminUser = () =>
+    ["admin", "staff", "super_admin"].includes(socket.user.role);
 
-  // Auto-join the user's own private room on connect
   if (!isAdminUser()) {
     const ownRoom = socket.user._id.toString();
     socket.join(ownRoom);

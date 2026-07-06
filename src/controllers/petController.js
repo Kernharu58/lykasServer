@@ -111,6 +111,15 @@ const adoptPet = async (req, res) => {
       return res.status(400).json({ message: "Pet already has a pending adoption application" });
     }
 
+    // Adoption applications require a verified identity first (see User Verification
+    // workflow). Fostering is intentionally exempt — it has its own lighter-weight vetting.
+    if (type === "adoption" && req.user.identityVerificationStatus !== "verified") {
+      return res.status(403).json({
+        message: "Please complete identity verification before applying to adopt.",
+        code: "IDENTITY_NOT_VERIFIED",
+      });
+    }
+
     // Prevent duplicate applications of the same type by the same user
     const existingApplication = await Application.findOne({
       pet: pet._id,

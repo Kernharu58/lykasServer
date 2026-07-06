@@ -19,7 +19,9 @@ const {
   impersonateUser,
   getAuditLogs,
   deleteUser,
-  adminResetAnyPassword // 👉 Added from your snippet
+  adminResetAnyPassword, // 👉 Added from your snippet
+  getVerificationQueue,
+  updateIdentityVerification,
 } = require("../controllers/authController");
 
 // Middleware to protect routes and handle file uploads
@@ -69,8 +71,11 @@ router.post("/google", googleLogin);
 
 // 👉 NEW: Admin User Management Routes
 router.get("/users", adminOnly, getAllUsers);
+// Specific paths declared before "/users/:id/..." so they aren't swallowed by the :id param
+router.get("/users/verification-queue", adminOnly, getVerificationQueue);
 router.put("/users/:id/role", adminOnly, updateUserRole);
 router.put("/users/:id/status", adminOnly, updateUserStatus);
+router.put("/users/:id/verification", adminOnly, updateIdentityVerification);
 router.post("/users/:id/impersonate", superAdminOnly, impersonateUser);
 router.delete("/users/:id", adminOnly, deleteUser);
 router.get("/audit-logs", superAdminOnly, getAuditLogs);

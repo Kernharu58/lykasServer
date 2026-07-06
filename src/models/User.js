@@ -76,6 +76,47 @@ const userSchema = new mongoose.Schema(
       type: Number, 
       default: 0 
     },
+    // ── User Verification (identity/contact/address) ─────────────────────────
+    // Required before an adoption application can be submitted (see
+    // petController.adoptPet). Distinct from emailVerified, which only
+    // confirms the email address.
+    phone: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+    address: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+    phoneVerified: {
+      type: Boolean,
+      default: false,
+    },
+    addressConfirmed: {
+      type: Boolean,
+      default: false,
+    },
+    identityVerificationStatus: {
+      type: String,
+      enum: ["unverified", "pending", "verified", "rejected"],
+      default: "unverified",
+    },
+    identityVerifiedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
+    identityVerifiedAt: {
+      type: Date,
+      default: null,
+    },
+    identityVerificationNotes: {
+      type: String,
+      trim: true,
+      default: "",
+    },
   },
   { timestamps: true }
 );

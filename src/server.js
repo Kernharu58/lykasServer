@@ -102,6 +102,11 @@ const adopterProfileRoutes = require("./routes/adopterProfileRoutes");
 const emergencyReportRoutes = require("./routes/emergencyReportRoutes");
 const reportsRoutes = require("./routes/reportsRoutes");
 const inKindDonationRoutes = require("./routes/inKindDonationRoutes"); // ✅ Bug 1 fix
+const analyticsRoutes = require("./routes/analyticsRoutes");
+const contentRoutes = require("./routes/contentRoutes");
+const shelterRoutes = require("./routes/shelterRoutes");
+const inventoryRoutes = require("./routes/inventoryRoutes");
+const feedbackRoutes = require("./routes/feedbackRoutes");
 const { protect, restrictTo } = require("./middleware/authMiddleware");
 
 app.use("/api/auth", authRoutes);
@@ -129,6 +134,11 @@ app.use("/api/adopter-profile", adopterProfileRoutes);
 app.use("/api/emergency-reports", emergencyReportRoutes);
 app.use("/api/reports", reportsRoutes);
 app.use("/api/donations/goods", inKindDonationRoutes); // ✅ Bug 1 fix
+app.use("/api/analytics", analyticsRoutes);
+app.use("/api/content", contentRoutes);
+app.use("/api/shelters", shelterRoutes);
+app.use("/api/inventory", inventoryRoutes);
+app.use("/api/feedback", feedbackRoutes);
 
 // ─── Inline chat routes ───────────────────────────────────────────────────────
 app.get("/api/messages/:userId", protect, async (req, res) => {

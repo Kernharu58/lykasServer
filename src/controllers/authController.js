@@ -6,6 +6,7 @@ const AuditLog = require("../models/AuditLog");
 const TokenBlacklist = require("../models/TokenBlacklist");
 const { sendVerificationEmail, sendPasswordResetEmail, sendEmail } = require("../utils/emailService");
 const { OAuth2Client } = require("google-auth-library");
+const { notify } = require("../utils/notificationHelper");
 
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || "7d";
 const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:3000";
@@ -550,6 +551,98 @@ const getAllUsers = async (req, res) => {
   }
 };
 
+// ═══════════════════════════════════════════════════════════
+// USER VERIFICATION
+// ═══════════════════════════════════════════════════════════
+
+// @desc    Get users whose identity verification needs staff attention
+//          (pending review first, then unverified, then rejected/verified)
+// @route   GET /api/auth/users/verification-queue?status=pending
+const getVerificationQueue = async (req, res) => {
+  try {
+    const { status } = req.query;
+    const filter = {};
+    if (status && ["unverified", "pending", "verified", "rejected"].includes(status)) {
+      filter.identityVerificationStatus = status;
+    }
+
+    const users = await User.find(filter)
+      .select("-password")
+      .populate("identityVerifiedBy", "displayName email")
+      .sort({ identityVerificationStatus: 1, createdAt: -1 });
+
+    // Sort so "pending" (awaiting staff review) always floats to the top
+    const priority = { pending: 0, unverified: 1, rejected: 2, verified: 3 };
+    users.sort((a, b) => (priority[a.identityVerificationStatus] ?? 9) - (priority[b.identityVerificationStatus] ?? 9));
+
+    res.status(200).json(users);
+  } catch (error) {
+    res.status(500).json({ message: "Server error", error: error.message });
+  }
+};
+
+// @desc    Approve, reject, or reset a user's identity verification
+// @route   PUT /api/auth/users/:id/verification
+// Body: { status: "verified" | "rejected" | "pending", notes, phoneVerified, addressConfirmed }
+const updateIdentityVerification = async (req, res) => {
+  try {
+    const { status, notes, phoneVerified, addressConfirmed } = req.body;
+    const allowed = ["unverified", "pending", "verified", "rejected"];
+    if (status !== undefined && !allowed.includes(status)) {
+      return res.status(400).json({ message: "Invalid verification status" });
+    }
+
+    const user = await User.findById(req.params.id);
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    const previousStatus = user.identityVerificationStatus;
+
+    if (status !== undefined) user.identityVerificationStatus = status;
+    if (notes !== undefined) user.identityVerificationNotes = notes;
+    if (phoneVerified !== undefined) user.phoneVerified = Boolean(phoneVerified);
+    if (addressConfirmed !== undefined) user.addressConfirmed = Boolean(addressConfirmed);
+
+    if (status === "verified" || status === "rejected") {
+      user.identityVerifiedBy = req.user._id;
+      user.identityVerifiedAt = new Date();
+    }
+
+    await user.save();
+
+    await createAuditLog({
+      actor: req.user?._id,
+      action: "IDENTITY_VERIFICATION_UPDATED",
+      targetUser: user._id,
+      metadata: { previousStatus, newStatus: user.identityVerificationStatus, notes },
+    });
+
+    if (status === "verified") {
+      await notify({
+        recipient: user._id,
+        sender: req.user._id,
+        type: "GENERAL",
+        title: "Identity verified ✅",
+        message: "Your account has been verified. You can now submit adoption applications.",
+      });
+    } else if (status === "rejected") {
+      await notify({
+        recipient: user._id,
+        sender: req.user._id,
+        type: "GENERAL",
+        title: "Verification needs attention",
+        message: notes
+          ? `Your verification was rejected: ${notes}`
+          : "Your verification was rejected. Please review and resubmit your documents.",
+      });
+    }
+
+    const updated = await User.findById(user._id).select("-password");
+    res.status(200).json(updated);
+  } catch (error) {
+    res.status(500).json({ message: "Server error", error: error.message });
+  }
+};
+
 // 👉 NEW: Update a user's role (Promote to Staff/Admin)
 // @route   PUT /api/auth/users/:id/role
 const updateUserRole = async (req, res) => {
@@ -871,4 +964,6 @@ module.exports = {
   deleteUser,
   adminResetAnyPassword,
   signup,
+  getVerificationQueue,
+  updateIdentityVerification,
 };

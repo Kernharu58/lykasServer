@@ -1,5 +1,6 @@
 const UserDocument = require("../models/UserDocument");
 const AuditLog     = require("../models/AuditLog");
+const User         = require("../models/User");
 const { notify }   = require("../utils/notificationHelper");
 const { cloudinary } = require("../config/cloudinary");
 
@@ -36,6 +37,16 @@ const uploadDocument = async (req, res) => {
       fileType:    req.file.mimetype,
       fileSize:    req.file.size,
     });
+
+    // A government ID upload moves the user's identity verification into the
+    // review queue, unless it's already been verified or is under rejection review.
+    if (type === "government_id") {
+      const user = await User.findById(req.user._id);
+      if (user && ["unverified", "rejected"].includes(user.identityVerificationStatus)) {
+        user.identityVerificationStatus = "pending";
+        await user.save();
+      }
+    }
 
     res.status(201).json({ message: "Document uploaded", document: doc });
   } catch (error) {
@@ -133,6 +144,17 @@ const verifyDocument = async (req, res) => {
     doc.verifiedAt     = new Date();
     if (rejectedReason) doc.rejectedReason = rejectedReason;
     await doc.save();
+
+    // Keep the user's overall identity verification status in sync when the
+    // reviewed document is their government ID.
+    if (doc.type === "government_id") {
+      await User.findByIdAndUpdate(doc.user._id, {
+        identityVerificationStatus: status,
+        identityVerifiedBy: req.user._id,
+        identityVerifiedAt: new Date(),
+        ...(rejectedReason ? { identityVerificationNotes: rejectedReason } : {}),
+      });
+    }
 
     await notify({
       recipient: doc.user._id,

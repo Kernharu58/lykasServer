@@ -1,6 +1,6 @@
 const Application = require("../models/Application");
 const AuditLog = require("../models/AuditLog");
-const { Foster } = require("../models/Foster");
+const { Foster, MIN_FOSTER_TRIAL_DAYS, MAX_FOSTER_TRIAL_DAYS } = require("../models/Foster");
 const { notify } = require("../utils/notificationHelper");
 
 // ─── Helper ──────────────────────────────────────────────────────────────────
@@ -236,23 +236,41 @@ const updateApplicationStatus = async (req, res) => {
         // ─── FOSTER approval: create the Foster placement, don't mark Adopted ───
         const existingActive = await Foster.findOne({ pet: pet._id, status: "active" });
         if (!existingActive) {
-          let expectedEndDate = null;
-          if (application.fosterPeriod) {
-            const months =
-              application.fosterPeriod === "1 month" ? 1 :
-              application.fosterPeriod === "2 months" ? 2 : null; // "Flexible" → no end date
-            if (months) {
-              expectedEndDate = new Date();
-              expectedEndDate.setMonth(expectedEndDate.getMonth() + months);
-            }
+          const startDate = new Date();
+
+          // Translate the applicant's requested fosterPeriod into a concrete
+          // trial length, clamped to the same 30–60 day window startFoster
+          // enforces, so weekly-report tracking actually engages here too —
+          // this used to be left null, silently disabling that gate for
+          // every foster approved through the normal application flow.
+          let trialDurationDays = null;
+          if (application.fosterPeriod === "1 month") trialDurationDays = 30;
+          else if (application.fosterPeriod === "2 months") trialDurationDays = 60;
+          // "Flexible" (or unset) → no fixed trial length, same as before.
+
+          if (trialDurationDays !== null) {
+            trialDurationDays = Math.min(
+              Math.max(trialDurationDays, MIN_FOSTER_TRIAL_DAYS),
+              MAX_FOSTER_TRIAL_DAYS
+            );
           }
+
+          const expectedEndDate = trialDurationDays
+            ? new Date(startDate.getTime() + trialDurationDays * 86400000)
+            : null;
+          const weeklyReportsRequired = trialDurationDays
+            ? Math.ceil(trialDurationDays / 7)
+            : null;
 
           await Foster.create({
             pet: pet._id,
             fosterer: application.applicant._id,
             application: application._id,
-            startDate: new Date(),
+            startDate,
             expectedEndDate,
+            trialDurationDays,
+            weeklyReportsRequired,
+            weeklyReportsSubmitted: 0,
             assignedBy: req.user._id,
           });
         }

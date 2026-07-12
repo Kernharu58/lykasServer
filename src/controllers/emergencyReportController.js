@@ -1,6 +1,6 @@
 const EmergencyReport = require("../models/EmergencyReport");
 const AuditLog        = require("../models/AuditLog");
-const { notifyMany }  = require("../utils/notificationHelper");
+const { notify, notifyMany } = require("../utils/notificationHelper");
 const User            = require("../models/User");
 const cloudinary      = require("../config/cloudinary");
 
@@ -133,6 +133,8 @@ const updateReport = async (req, res) => {
 
     const { status, priority, assignedTo, resolutionNote, linkedPet } = req.body;
 
+    const previousStatus = report.status;
+
     if (status     !== undefined) report.status     = status;
     if (priority   !== undefined) report.priority   = priority;
     if (assignedTo !== undefined) report.assignedTo = assignedTo;
@@ -150,6 +152,36 @@ const updateReport = async (req, res) => {
       actor: req.user._id, action: "EMERGENCY_REPORT_UPDATED",
       metadata: { reportId: report._id, status, priority },
     });
+
+    // Let the reporter know their report was acted on — previously this
+    // endpoint only logged the change and admins never heard back.
+    if (
+      report.submittedBy &&
+      status !== undefined &&
+      status !== previousStatus &&
+      (status === "resolved" || status === "dismissed" || status === "in_progress")
+    ) {
+      const titleByStatus = {
+        resolved:    "Your report has been resolved ✅",
+        dismissed:   "Your report was reviewed",
+        in_progress: "Your report is being investigated",
+      };
+      const messageByStatus = {
+        resolved:    resolutionNote || "Thanks for the report — our team has resolved this.",
+        dismissed:   resolutionNote || "Our team reviewed your report and closed it.",
+        in_progress: "Our team has picked up your report and is looking into it.",
+      };
+
+      await notify({
+        recipient: report.submittedBy._id,
+        sender:    req.user._id,
+        type:      "GENERAL",
+        title:     titleByStatus[status],
+        message:   messageByStatus[status],
+        refModel:  "EmergencyReport",
+        refId:     report._id,
+      });
+    }
 
     res.status(200).json({ message: "Report updated", report });
   } catch (error) {

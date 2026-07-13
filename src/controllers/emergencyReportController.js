@@ -189,4 +189,4 @@ const updateReport = async (req, res) => {
   }
 };
 
-module.exports = { submitReport, getMyReports, getAllReports, getReportById, updateReport };
+module.exports = { submitReport, getMyReports, getAllReports, getReportById, updateReport };                                                

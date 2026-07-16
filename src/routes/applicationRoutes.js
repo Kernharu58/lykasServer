@@ -7,6 +7,9 @@ const {
   cancelApplication,
   getAllApplications,
   updateApplicationStatus,
+  addInternalNote,
+  getInternalNotes,
+  getVettingStatus,
 } = require("../controllers/applicationController");
 
 const adminOnly = [protect, restrictTo("admin", "staff", "super_admin")];
@@ -27,5 +30,14 @@ router.delete("/:id", protect, cancelApplication);
 
 // PUT  /api/applications/:id/status   → admin approve/reject
 router.put("/:id/status", adminOnly, updateApplicationStatus);
+
+// ─── Internal (staff-only) coordinator notes ──────────────────────────────────
+// GET  /api/applications/:id/notes   → list notes (hidden from applicant)
+// POST /api/applications/:id/notes   → add a note
+router.get("/:id/notes", adminOnly, getInternalNotes);
+router.post("/:id/notes", adminOnly, addInternalNote);
+
+// GET /api/applications/:id/vetting-status → interview/home-visit gate status
+router.get("/:id/vetting-status", adminOnly, getVettingStatus);
 
 module.exports = router;

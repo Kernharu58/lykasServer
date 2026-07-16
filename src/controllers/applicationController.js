@@ -1,6 +1,8 @@
 const Application = require("../models/Application");
 const AuditLog = require("../models/AuditLog");
-const { Foster, MIN_FOSTER_TRIAL_DAYS, MAX_FOSTER_TRIAL_DAYS } = require("../models/Foster");
+const Interview = require("../models/Interview");
+const HomeVisit = require("../models/HomeVisit");
+const { Foster } = require("../models/Foster");
 const { notify } = require("../utils/notificationHelper");
 
 // ─── Helper ──────────────────────────────────────────────────────────────────
@@ -24,6 +26,32 @@ const releasePetIfUnclaimed = async (pet, excludeApplicationId) => {
     pet.status = "Available";
     pet.owner = null;
   }
+};
+
+// ─── Helper: has this application cleared the staged vetting workflow? ──────
+// CRITICAL FIX: previously `updateApplicationStatus` could approve an
+// application straight from "pending" with no interview or home visit on
+// record at all, letting staff bypass the vetting pipeline entirely (there
+// was also no admin UI for interviews/home visits, compounding the gap).
+// This checks that the most recent interview AND most recent home visit for
+// the application both completed with a "passed" result before an approval
+// is allowed to go through.
+const getVettingGateStatus = async (applicationId) => {
+  const [latestInterview, latestHomeVisit] = await Promise.all([
+    Interview.findOne({ application: applicationId }).sort({ createdAt: -1 }),
+    HomeVisit.findOne({ application: applicationId }).sort({ createdAt: -1 }),
+  ]);
+
+  const interviewPassed =
+    !!latestInterview && latestInterview.status === "completed" && latestInterview.result === "passed";
+  const homeVisitPassed =
+    !!latestHomeVisit && latestHomeVisit.status === "completed" && latestHomeVisit.result === "passed";
+
+  const missing = [];
+  if (!interviewPassed) missing.push("a passed interview");
+  if (!homeVisitPassed) missing.push("a passed home visit");
+
+  return { cleared: missing.length === 0, missing };
 };
 
 // ─── SHARED: Auto-reject an application (used by interview/home-visit fail) ──
@@ -224,6 +252,15 @@ const updateApplicationStatus = async (req, res) => {
       });
     }
 
+    if (status === "approved") {
+      const { cleared, missing } = await getVettingGateStatus(application._id);
+      if (!cleared) {
+        return res.status(400).json({
+          message: `Cannot approve yet — this application still needs ${missing.join(" and ")} before it can move forward.`,
+        });
+      }
+    }
+
     const Pet = require("../models/Pet");
     const pet = await Pet.findById(application.pet._id);
 
@@ -236,41 +273,23 @@ const updateApplicationStatus = async (req, res) => {
         // ─── FOSTER approval: create the Foster placement, don't mark Adopted ───
         const existingActive = await Foster.findOne({ pet: pet._id, status: "active" });
         if (!existingActive) {
-          const startDate = new Date();
-
-          // Translate the applicant's requested fosterPeriod into a concrete
-          // trial length, clamped to the same 30–60 day window startFoster
-          // enforces, so weekly-report tracking actually engages here too —
-          // this used to be left null, silently disabling that gate for
-          // every foster approved through the normal application flow.
-          let trialDurationDays = null;
-          if (application.fosterPeriod === "1 month") trialDurationDays = 30;
-          else if (application.fosterPeriod === "2 months") trialDurationDays = 60;
-          // "Flexible" (or unset) → no fixed trial length, same as before.
-
-          if (trialDurationDays !== null) {
-            trialDurationDays = Math.min(
-              Math.max(trialDurationDays, MIN_FOSTER_TRIAL_DAYS),
-              MAX_FOSTER_TRIAL_DAYS
-            );
+          let expectedEndDate = null;
+          if (application.fosterPeriod) {
+            const months =
+              application.fosterPeriod === "1 month" ? 1 :
+              application.fosterPeriod === "2 months" ? 2 : null; // "Flexible" → no end date
+            if (months) {
+              expectedEndDate = new Date();
+              expectedEndDate.setMonth(expectedEndDate.getMonth() + months);
+            }
           }
-
-          const expectedEndDate = trialDurationDays
-            ? new Date(startDate.getTime() + trialDurationDays * 86400000)
-            : null;
-          const weeklyReportsRequired = trialDurationDays
-            ? Math.ceil(trialDurationDays / 7)
-            : null;
 
           await Foster.create({
             pet: pet._id,
             fosterer: application.applicant._id,
             application: application._id,
-            startDate,
+            startDate: new Date(),
             expectedEndDate,
-            trialDurationDays,
-            weeklyReportsRequired,
-            weeklyReportsSubmitted: 0,
             assignedBy: req.user._id,
           });
         }
@@ -373,6 +392,35 @@ const getInternalNotes = async (req, res) => {
   }
 };
 
+// ─── ADMIN: Get vetting stage status for an application ──────────────────────
+// GET /api/applications/:id/vetting-status
+// Lets the admin UI show/gate the Approve action without guessing.
+const getVettingStatus = async (req, res) => {
+  try {
+    const application = await Application.findById(req.params.id);
+    if (!application) return res.status(404).json({ message: "Application not found" });
+
+    const [latestInterview, latestHomeVisit] = await Promise.all([
+      Interview.findOne({ application: application._id }).sort({ createdAt: -1 }),
+      HomeVisit.findOne({ application: application._id }).sort({ createdAt: -1 }),
+    ]);
+    const { cleared, missing } = await getVettingGateStatus(application._id);
+
+    res.status(200).json({
+      cleared,
+      missing,
+      interview: latestInterview
+        ? { _id: latestInterview._id, status: latestInterview.status, result: latestInterview.result }
+        : null,
+      homeVisit: latestHomeVisit
+        ? { _id: latestHomeVisit._id, status: latestHomeVisit.status, result: latestHomeVisit.result }
+        : null,
+    });
+  } catch (error) {
+    res.status(500).json({ message: "Server Error", error: error.message });
+  }
+};
+
 module.exports = {
   getMyApplications,
   getApplicationById,
@@ -382,4 +430,5 @@ module.exports = {
   autoRejectApplication,
   addInternalNote,
   getInternalNotes,
-};             
+  getVettingStatus,
+};

@@ -28,6 +28,9 @@ const {
   adminResetAnyPassword, // 👉 Added from your snippet
   getVerificationQueue,
   updateIdentityVerification,
+  getSessions,
+  revokeSession,
+  revokeOtherSessions,
 } = require("../controllers/authController");
 
 // Middleware to protect routes and handle file uploads
@@ -56,6 +59,11 @@ router.post("/reset-password", resetPassword);
 
 // @desc    Logout user and blacklist token
 router.post("/logout", protect, logoutUser);
+
+// ── Session management (Operational Feature) ─────────────────────────────
+router.get("/sessions", protect, getSessions);
+router.delete("/sessions/:id", protect, revokeSession);
+router.delete("/sessions", protect, revokeOtherSessions);
 
 // @desc    Get current logged in user details
 router.get("/me", protect, getMe);

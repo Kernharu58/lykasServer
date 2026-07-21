@@ -62,4 +62,30 @@ const getSystemHealth = async (_req, res) => {
   }
 };
 
-module.exports = { getSystemHealth };
+// GET /api/system/version — Operational Feature: "Version information"
+const getVersion = async (_req, res) => {
+  try {
+    const pkg = require("../../package.json");
+    let commit = null;
+    try {
+      commit = require("child_process")
+        .execSync("git rev-parse --short HEAD", { cwd: __dirname, stdio: ["ignore", "pipe", "ignore"] })
+        .toString()
+        .trim();
+    } catch (e) {
+      commit = null; // not a git checkout (e.g. deployed as a plain build) — fine to omit
+    }
+
+    res.status(200).json({
+      name: pkg.name,
+      version: pkg.version,
+      commit,
+      nodeVersion: process.version,
+      environment: process.env.NODE_ENV || "development",
+    });
+  } catch (error) {
+    res.status(500).json({ message: "Server Error", error: error.message });
+  }
+};
+
+module.exports = { getSystemHealth, getVersion };

@@ -5,6 +5,7 @@ const crypto = require("crypto");
 const AuditLog = require("../models/AuditLog");
 const TokenBlacklist = require("../models/TokenBlacklist");
 const LoginHistory = require("../models/LoginHistory");
+const Session = require("../models/Session");
 const { sendVerificationEmail, sendPasswordResetEmail, sendEmail } = require("../utils/emailService");
 const { OAuth2Client } = require("google-auth-library");
 const { notify } = require("../utils/notificationHelper");
@@ -250,6 +251,20 @@ const loginUser = async (req, res) => {
 
     await recordLogin({ user, email, success: true, reason: "ok", req });
 
+    // Track this token as an active session (Operational Feature: Session Management)
+    try {
+      const decodedForSession = jwt.decode(token);
+      await Session.create({
+        user: user._id,
+        token,
+        ipAddress: req.ip || req.headers["x-forwarded-for"] || null,
+        userAgent: req.headers["user-agent"] || null,
+        expiresAt: new Date(decodedForSession.exp * 1000),
+      });
+    } catch (sessionErr) {
+      console.error("Session create failed:", sessionErr.message);
+    }
+
     res.status(200).json({
       message: "Login successful",
       token,
@@ -451,6 +466,8 @@ const logoutUser = async (req, res) => {
       reason: "logout",
     });
 
+    await Session.updateOne({ token }, { revoked: true, revokedAt: new Date() });
+
     await createAuditLog({
       actor: req.user?._id,
       action: "LOGOUT",
@@ -459,6 +476,90 @@ const logoutUser = async (req, res) => {
     });
 
     res.status(200).json({ message: "Logged out successfully" });
+  } catch (error) {
+    res.status(500).json({ message: "Server error", error: error.message });
+  }
+};
+
+// @desc    List the requesting user's active (non-revoked, non-expired) sessions
+// @route   GET /api/auth/sessions
+// @access  Private
+const getSessions = async (req, res) => {
+  try {
+    const currentToken = req.headers.authorization?.split(" ")[1];
+    const sessions = await Session.find({
+      user: req.user._id,
+      revoked: false,
+      expiresAt: { $gt: new Date() },
+    }).sort({ lastActiveAt: -1 });
+
+    res.status(200).json({
+      sessions: sessions.map((s) => ({
+        id: s._id,
+        ipAddress: s.ipAddress,
+        userAgent: s.userAgent,
+        createdAt: s.createdAt,
+        lastActiveAt: s.lastActiveAt,
+        isCurrent: s.token === currentToken,
+      })),
+    });
+  } catch (error) {
+    res.status(500).json({ message: "Server error", error: error.message });
+  }
+};
+
+// @desc    Revoke one specific session (e.g. "log out that device")
+// @route   DELETE /api/auth/sessions/:id
+// @access  Private
+const revokeSession = async (req, res) => {
+  try {
+    const session = await Session.findOne({ _id: req.params.id, user: req.user._id });
+    if (!session) return res.status(404).json({ message: "Session not found" });
+
+    session.revoked = true;
+    session.revokedAt = new Date();
+    await session.save();
+
+    const decoded = jwt.decode(session.token);
+    await TokenBlacklist.create({
+      token: session.token,
+      userId: req.user._id,
+      expiresAt: decoded?.exp ? new Date(decoded.exp * 1000) : session.expiresAt,
+      reason: "session_revoked",
+    });
+
+    res.status(200).json({ message: "Session revoked" });
+  } catch (error) {
+    res.status(500).json({ message: "Server error", error: error.message });
+  }
+};
+
+// @desc    Revoke every session for this user except the one making the request
+// @route   DELETE /api/auth/sessions
+// @access  Private
+const revokeOtherSessions = async (req, res) => {
+  try {
+    const currentToken = req.headers.authorization?.split(" ")[1];
+    const sessions = await Session.find({
+      user: req.user._id,
+      revoked: false,
+      token: { $ne: currentToken },
+    });
+
+    for (const session of sessions) {
+      session.revoked = true;
+      session.revokedAt = new Date();
+      await session.save();
+      const decoded = jwt.decode(session.token);
+      await TokenBlacklist.create({
+        token: session.token,
+        userId: req.user._id,
+        expiresAt: decoded?.exp ? new Date(decoded.exp * 1000) : session.expiresAt,
+        reason: "session_revoked",
+      });
+    }
+
+    res.status(200).json({ message: `${sessions.length} other session(s) revoked` });
   } catch (error) {
     res.status(500).json({ message: "Server error", error: error.message });
   }
@@ -1140,4 +1241,7 @@ module.exports = {
   signup,
   getVerificationQueue,
   updateIdentityVerification,
+  getSessions,
+  revokeSession,
+  revokeOtherSessions,
 };

@@ -38,6 +38,9 @@ const userDocumentSchema = new mongoose.Schema(
     },
     verifiedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
     verifiedAt: { type: Date, default: null },
+    // Optional — only meaningful for ID-type documents (passport, gov't ID)
+    // that carry their own expiry. Used by the "expired documents" reminder job.
+    expiresAt: { type: Date, default: null },
     rejectedReason: { type: String, trim: true, default: "" },
     notes:      { type: String, trim: true },
   },

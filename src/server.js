@@ -25,6 +25,9 @@ const allowedOrigins = (process.env.FRONTEND_URL || "")
 
 app.set("trust proxy", 1);
 
+const apiMonitor = require("./middleware/apiMonitorMiddleware");
+const maintenanceMode = require("./middleware/maintenanceMode");
+
 const isDev = process.env.NODE_ENV !== "production";
 const devOrigins = [
   "http://localhost:3000",
@@ -63,6 +66,8 @@ const limiter = rateLimit({
   message: "Too many requests from this IP, please try again later.",
 });
 app.use("/api/", limiter);
+app.use("/api/", apiMonitor);
+app.use(maintenanceMode);
 
 app.get("/health", (_req, res) => {
   res.status(200).json({
@@ -109,6 +114,20 @@ const inventoryRoutes = require("./routes/inventoryRoutes");
 const feedbackRoutes = require("./routes/feedbackRoutes");
 const noteRoutes = require("./routes/noteRoutes");
 const systemRoutes = require("./routes/systemRoutes");
+const roleRoutes = require("./routes/roleRoutes");
+const backupRoutes = require("./routes/backupRoutes");
+const scheduledJobRoutes = require("./routes/scheduledJobRoutes");
+const emailTemplateRoutes = require("./routes/emailTemplateRoutes");
+const fileAssetRoutes = require("./routes/fileAssetRoutes");
+const apiMonitoringRoutes = require("./routes/apiMonitoringRoutes");
+const archiveRoutes = require("./routes/archiveRoutes");
+const duplicateRoutes = require("./routes/duplicateRoutes");
+const featureFlagRoutes = require("./routes/featureFlagRoutes");
+const announcementRoutes = require("./routes/announcementRoutes");
+const migrationRoutes = require("./routes/migrationRoutes");
+const apiKeyRoutes = require("./routes/apiKeyRoutes");
+const errorLogRoutes = require("./routes/errorLogRoutes");
+const { logServerError } = require("./controllers/errorLogController");
 const { protect, restrictTo } = require("./middleware/authMiddleware");
 
 app.use("/api/auth", authRoutes);
@@ -143,6 +162,19 @@ app.use("/api/inventory", inventoryRoutes);
 app.use("/api/feedback", feedbackRoutes);
 app.use("/api/notes", noteRoutes);
 app.use("/api/system", systemRoutes);
+app.use("/api/roles", roleRoutes);
+app.use("/api/backups", backupRoutes);
+app.use("/api/scheduled-jobs", scheduledJobRoutes);
+app.use("/api/email-templates", emailTemplateRoutes);
+app.use("/api/files", fileAssetRoutes);
+app.use("/api/monitoring/api", apiMonitoringRoutes);
+app.use("/api/archive", archiveRoutes);
+app.use("/api/duplicates", duplicateRoutes);
+app.use("/api/feature-flags", featureFlagRoutes);
+app.use("/api/announcements", announcementRoutes);
+app.use("/api/migrations", migrationRoutes);
+app.use("/api/api-keys", apiKeyRoutes);
+app.use("/api/errors", errorLogRoutes);
 
 // ─── Inline chat routes ───────────────────────────────────────────────────────
 app.get("/api/messages/:userId", protect, async (req, res) => {
@@ -199,8 +231,16 @@ app.use((req, res) => {
   res.status(404).json({ message: "Route not found" });
 });
 
-app.use((err, _req, res, _next) => {
+app.use((err, req, res, _next) => {
   console.error(err.stack);
+  logServerError({
+    message: err.message,
+    stack: err.stack,
+    route: req.originalUrl,
+    method: req.method,
+    statusCode: 500,
+    userId: req.user?._id || null,
+  });
   res.status(500).json({ message: "Something went wrong!" });
 });
 

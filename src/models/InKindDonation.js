@@ -38,6 +38,10 @@ const inKindDonationSchema = new mongoose.Schema(
     },
     staffNote:  { type: String, trim: true, default: "" },
     receivedAt: { type: Date, default: null },
+    // ── Soft delete ─────────────────────────────────────────────────────────
+    isDeleted: { type: Boolean, default: false, index: true },
+    deletedAt: { type: Date, default: null },
+    deletedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
   },
   { timestamps: true }
 );

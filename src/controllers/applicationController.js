@@ -4,6 +4,9 @@ const Interview = require("../models/Interview");
 const HomeVisit = require("../models/HomeVisit");
 const { Foster } = require("../models/Foster");
 const { notify } = require("../utils/notificationHelper");
+const { logChange, getRecordHistory } = require("../utils/auditLogger");
+const { buildListQuery, buildPagination } = require("../utils/queryBuilder");
+const { sendCsv, sendExcel, sendPdf } = require("../utils/exportUtil");
 
 // ─── Helper ──────────────────────────────────────────────────────────────────
 const logAction = async ({ actor, action, targetUser, metadata }) => {
@@ -190,36 +193,175 @@ const cancelApplication = async (req, res) => {
   }
 };
 
-// ─── ADMIN: Get all applications (with optional status filter) ────────────────
-// GET /api/applications?status=pending&page=1&limit=20
+// ─── ADMIN: Get all applications (with search/sort/filter/pagination) ───────
+// GET /api/applications?status=pending&type=adoption&stage=interview&q=juan&sortBy=createdAt&sortOrder=desc&page=1&limit=20
 const getAllApplications = async (req, res) => {
   try {
-    const { status, page = 1, limit = 20 } = req.query;
-    const filter = {};
-    if (status && ["pending", "approved", "rejected"].includes(status)) {
-      filter.status = status;
-    }
+    const { filter, sort, skip, limit, page } = buildListQuery(req.query, {
+      filterFields: ["status", "type", "stage"],
+    });
 
-    const skip = (Number(page) - 1) * Number(limit);
     const [applications, total] = await Promise.all([
       Application.find(filter)
         .populate("applicant", "displayName email profilePicture")
         .populate("pet", "name species breed imageUrl status")
         .populate("reviewedBy", "displayName email")
-        .sort({ createdAt: -1 })
+        .sort(sort)
         .skip(skip)
-        .limit(Number(limit)),
+        .limit(limit),
       Application.countDocuments(filter),
     ]);
 
     res.status(200).json({
       applications,
-      pagination: {
-        total,
-        page: Number(page),
-        pages: Math.ceil(total / Number(limit)),
-      },
+      pagination: buildPagination(total, page, limit),
     });
+  } catch (error) {
+    res.status(500).json({ message: "Server Error", error: error.message });
+  }
+};
+
+// ─── ADMIN: Export applications as CSV/Excel/PDF ─────────────────────────────
+// GET /api/applications/export?format=csv&status=pending
+const exportApplications = async (req, res) => {
+  try {
+    const { filter } = buildListQuery(req.query, { filterFields: ["status", "type", "stage"] });
+    const format = (req.query.format || "csv").toLowerCase();
+
+    const applications = await Application.find(filter)
+      .populate("applicant", "displayName email")
+      .populate("pet", "name species breed")
+      .sort("-createdAt");
+
+    const rows = applications.map((a) => ({
+      id: a._id.toString(),
+      applicant: a.applicant?.displayName || "",
+      applicantEmail: a.applicant?.email || "",
+      pet: a.pet?.name || "",
+      species: a.pet?.species || "",
+      type: a.type,
+      status: a.status,
+      stage: a.stage,
+      phone: a.phone,
+      address: a.address,
+      submittedAt: a.createdAt?.toISOString(),
+      reviewedAt: a.reviewedAt ? a.reviewedAt.toISOString() : "",
+    }));
+
+    if (format === "excel" || format === "xlsx") {
+      return sendExcel(res, "applications.xlsx", rows);
+    }
+    if (format === "pdf") {
+      return sendPdf(res, "applications.pdf", "Applications Export", rows);
+    }
+    return sendCsv(res, "applications.csv", rows);
+  } catch (error) {
+    res.status(500).json({ message: "Server Error", error: error.message });
+  }
+};
+
+// ─── ADMIN: Bulk approve / reject applications ───────────────────────────────
+// POST /api/applications/bulk-status  { ids: [...], status: "approved"|"rejected", remarks? }
+// Applies the same rules as updateApplicationStatus (incl. vetting gate for
+// approvals) to each id individually so partial failures are reported back
+// rather than silently skipped.
+const bulkUpdateStatus = async (req, res) => {
+  try {
+    const { ids, status, remarks } = req.body;
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ message: "ids must be a non-empty array" });
+    }
+    if (!["approved", "rejected"].includes(status)) {
+      return res.status(400).json({ message: "Status must be 'approved' or 'rejected'" });
+    }
+
+    const results = [];
+    for (const id of ids) {
+      const fakeReq = { params: { id }, body: { status, remarks }, user: req.user };
+      let outcome = { id, ok: false, message: "" };
+      await new Promise((resolve) => {
+        const fakeRes = {
+          status: (code) => ({
+            json: (payload) => {
+              outcome.ok = code >= 200 && code < 300;
+              outcome.message = payload.message;
+              resolve();
+            },
+          }),
+        };
+        updateApplicationStatus(fakeReq, fakeRes).catch((err) => {
+          outcome.message = err.message;
+          resolve();
+        });
+      });
+      results.push(outcome);
+    }
+
+    res.status(200).json({
+      message: `Processed ${results.length} application(s)`,
+      succeeded: results.filter((r) => r.ok).length,
+      failed: results.filter((r) => !r.ok).length,
+      results,
+    });
+  } catch (error) {
+    res.status(500).json({ message: "Server Error", error: error.message });
+  }
+};
+
+// ─── ADMIN: Get per-record audit history for an application ─────────────────
+// GET /api/applications/:id/history
+const getApplicationHistory = async (req, res) => {
+  try {
+    const history = await getRecordHistory("Application", req.params.id, req.query);
+    res.status(200).json(history);
+  } catch (error) {
+    res.status(500).json({ message: "Server Error", error: error.message });
+  }
+};
+
+// ─── ADMIN: Manually advance/set the workflow stage ──────────────────────────
+// PUT /api/applications/:id/stage  { stage: "interview", note?: "..." }
+// This is separate from status (approved/rejected/pending) — it lets staff
+// track *where in the pipeline* a pending application is, for the progress
+// tracker UI, without touching the approval decision itself.
+const STAGE_ORDER = [
+  "submitted",
+  "document_review",
+  "interview",
+  "home_visit",
+  "risk_assessment",
+  "approved",
+  "adoption_scheduled",
+  "completed",
+];
+
+const advanceStage = async (req, res) => {
+  try {
+    const { stage, note } = req.body;
+    const allowed = [...STAGE_ORDER, "rejected"];
+    if (!allowed.includes(stage)) {
+      return res.status(400).json({ message: `Stage must be one of: ${allowed.join(", ")}` });
+    }
+
+    const application = await Application.findById(req.params.id);
+    if (!application) return res.status(404).json({ message: "Application not found" });
+
+    const previousStage = application.stage;
+    application.stage = stage;
+    application.stageHistory.push({ stage, changedBy: req.user._id, note: note || "" });
+    await application.save();
+
+    await logChange({
+      actor: req.user._id,
+      action: "APPLICATION_STAGE_CHANGE",
+      entityType: "Application",
+      entityId: application._id,
+      before: { stage: previousStage },
+      after: { stage },
+      req,
+    });
+
+    res.status(200).json({ message: `Stage updated to ${stage}`, application });
   } catch (error) {
     res.status(500).json({ message: "Server Error", error: error.message });
   }
@@ -267,6 +409,8 @@ const updateApplicationStatus = async (req, res) => {
     application.status = status;
     application.reviewedBy = req.user._id;
     application.reviewedAt = new Date();
+    application.stage = status === "approved" ? "approved" : "rejected";
+    application.stageHistory.push({ stage: application.stage, changedBy: req.user._id, note: remarks || "" });
 
     if (status === "approved") {
       if (application.type === "foster") {
@@ -431,4 +575,8 @@ module.exports = {
   addInternalNote,
   getInternalNotes,
   getVettingStatus,
+  exportApplications,
+  bulkUpdateStatus,
+  getApplicationHistory,
+  advanceStage,
 };

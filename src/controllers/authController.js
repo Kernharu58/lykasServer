@@ -4,9 +4,13 @@ const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
 const AuditLog = require("../models/AuditLog");
 const TokenBlacklist = require("../models/TokenBlacklist");
+const LoginHistory = require("../models/LoginHistory");
 const { sendVerificationEmail, sendPasswordResetEmail, sendEmail } = require("../utils/emailService");
 const { OAuth2Client } = require("google-auth-library");
 const { notify } = require("../utils/notificationHelper");
+const { logChange, getRecordHistory } = require("../utils/auditLogger");
+const { buildListQuery, buildPagination } = require("../utils/queryBuilder");
+const { sendCsv, sendExcel, sendPdf } = require("../utils/exportUtil");
 
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || "7d";
 const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:3000";
@@ -139,6 +143,24 @@ const signup = async (req, res) => {
   }
 };
 
+// ── Login history helper ────────────────────────────────────────────────────
+// Records every login attempt (success or failure) so admins can see login
+// history + failed-login patterns per account (Operational Features).
+const recordLogin = async ({ user, email, success, reason, req }) => {
+  try {
+    await LoginHistory.create({
+      user: user?._id || null,
+      email,
+      success,
+      reason,
+      ipAddress: req?.ip || req?.headers?.["x-forwarded-for"] || null,
+      userAgent: req?.headers?.["user-agent"] || null,
+    });
+  } catch (err) {
+    console.error("Login history log failed:", err.message);
+  }
+};
+
 // @desc    Authenticate a user & get token
 // @route   POST /api/auth/login
 const loginUser = async (req, res) => {
@@ -153,15 +175,23 @@ const loginUser = async (req, res) => {
     // 1. Find the user by email
     const user = await User.findOne({ email });
     if (!user) {
+      await recordLogin({ user: null, email, success: false, reason: "user_not_found", req });
       return res.status(404).json({ message: "User not found" });
+    }
+
+    if (user.isDeleted) {
+      await recordLogin({ user, email, success: false, reason: "account_deleted", req });
+      return res.status(403).json({ message: "This account has been deleted." });
     }
 
     // 2. Check account status
     if (user.status === "suspended") {
+      await recordLogin({ user, email, success: false, reason: "account_suspended", req });
       return res.status(403).json({ message: "Account is suspended. Please contact support." });
     }
     if (user.status === "locked") {
       if (user.lockedUntil && new Date() < user.lockedUntil) {
+        await recordLogin({ user, email, success: false, reason: "account_locked", req });
         return res.status(403).json({ message: `Account locked until ${user.lockedUntil}` });
       } else if (user.lockedUntil && new Date() >= user.lockedUntil) {
         // Auto-unlock if lock period has expired
@@ -169,6 +199,7 @@ const loginUser = async (req, res) => {
         user.lockedUntil = null;
         await user.save();
       } else {
+        await recordLogin({ user, email, success: false, reason: "account_locked", req });
         return res.status(403).json({ message: "Account is locked permanently." });
       }
     }
@@ -187,12 +218,14 @@ const loginUser = async (req, res) => {
         user.lockedUntil = new Date(Date.now() + 30 * 60 * 1000);
         user.failedLoginAttempts = 0;
         await user.save();
+        await recordLogin({ user, email, success: false, reason: "account_locked", req });
         return res.status(403).json({
           message: "Too many failed attempts. Account locked for 30 minutes.",
         });
       }
 
       await user.save();
+      await recordLogin({ user, email, success: false, reason: "invalid_credentials", req });
       return res.status(400).json({ message: "Invalid credentials" });
     }
 
@@ -204,6 +237,7 @@ const loginUser = async (req, res) => {
 
     // 3b. Block login if email has not been verified yet (Shichi Auth §3)
     if (!user.emailVerified) {
+      await recordLogin({ user, email, success: false, reason: "email_not_verified", req });
       return res.status(403).json({
         message: "Please verify your email before logging in. Check your inbox for a verification link.",
       });
@@ -213,6 +247,8 @@ const loginUser = async (req, res) => {
     const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, {
       expiresIn: JWT_EXPIRES_IN,
     });
+
+    await recordLogin({ user, email, success: true, reason: "ok", req });
 
     res.status(200).json({
       message: "Login successful",
@@ -544,8 +580,18 @@ const updateProfile = async (req, res) => {
 // @route   GET /api/auth/users
 const getAllUsers = async (req, res) => {
   try {
-    const users = await User.find({}).select("-password").sort({ createdAt: -1 });
-    res.status(200).json(users);
+    const { filter, sort, skip, limit, page } = buildListQuery(req.query, {
+      searchFields: ["displayName", "email"],
+      filterFields: ["role", "status"],
+      softDelete: true,
+    });
+
+    const [users, total] = await Promise.all([
+      User.find(filter).select("-password").sort(sort).skip(skip).limit(limit),
+      User.countDocuments(filter),
+    ]);
+
+    res.status(200).json({ users, pagination: buildPagination(total, page, limit) });
   } catch (error) {
     res.status(500).json({ message: "Server error", error: error.message });
   }
@@ -748,17 +794,139 @@ const getAuditLogs = async (_req, res) => {
 // @route   DELETE /api/auth/users/:id
 const deleteUser = async (req, res) => {
   try {
+    const user = await User.findById(req.params.id);
+    if (!user) return res.status(404).json({ message: "User not found" });
+    if (user.isDeleted) return res.status(400).json({ message: "User is already deleted" });
+
+    user.isDeleted = true;
+    user.deletedAt = new Date();
+    user.deletedBy = req.user?._id || null;
+    await user.save();
+
+    await createAuditLog({
+      actor: req.user?._id,
+      action: "USER_SOFT_DELETE",
+      targetUser: user._id,
+      metadata: { email: user.email, role: user.role },
+    });
+
+    res.status(200).json({ message: "User moved to Deleted (recoverable from Archive)." });
+  } catch (error) {
+    res.status(500).json({ message: "Server error", error: error.message });
+  }
+};
+
+// @desc    Restore a soft-deleted user
+// @route   POST /api/auth/users/:id/restore
+const restoreUser = async (req, res) => {
+  try {
+    const user = await User.findById(req.params.id);
+    if (!user) return res.status(404).json({ message: "User not found" });
+    if (!user.isDeleted) return res.status(400).json({ message: "User is not deleted" });
+
+    user.isDeleted = false;
+    user.deletedAt = null;
+    user.deletedBy = null;
+    await user.save();
+
+    await createAuditLog({
+      actor: req.user?._id,
+      action: "USER_RESTORE",
+      targetUser: user._id,
+      metadata: { email: user.email },
+    });
+
+    res.status(200).json({ message: "User restored.", user });
+  } catch (error) {
+    res.status(500).json({ message: "Server error", error: error.message });
+  }
+};
+
+// @desc    Permanently delete a user (irreversible) — super_admin only, gated in routes
+// @route   DELETE /api/auth/users/:id/permanent
+const permanentlyDeleteUser = async (req, res) => {
+  try {
     const user = await User.findByIdAndDelete(req.params.id);
     if (!user) return res.status(404).json({ message: "User not found" });
 
     await createAuditLog({
       actor: req.user?._id,
-      action: "USER_DELETE",
+      action: "USER_PERMANENT_DELETE",
       targetUser: user._id,
-      metadata: { email: user.email, role: user.role, status: user.status },
+      metadata: { email: user.email, role: user.role },
     });
 
-    res.status(200).json({ message: "User deleted successfully" });
+    res.status(200).json({ message: "User permanently deleted." });
+  } catch (error) {
+    res.status(500).json({ message: "Server error", error: error.message });
+  }
+};
+
+// @desc    Export users as CSV/Excel/PDF
+// @route   GET /api/auth/users/export?format=csv
+const exportUsers = async (req, res) => {
+  try {
+    const { filter } = buildListQuery(req.query, {
+      searchFields: ["displayName", "email"],
+      filterFields: ["role", "status"],
+      softDelete: true,
+    });
+    const format = (req.query.format || "csv").toLowerCase();
+    const users = await User.find(filter).select("-password").sort("-createdAt");
+
+    const rows = users.map((u) => ({
+      id: u._id.toString(),
+      name: u.displayName,
+      email: u.email,
+      role: u.role,
+      status: u.status,
+      emailVerified: u.emailVerified,
+      identityVerificationStatus: u.identityVerificationStatus,
+      createdAt: u.createdAt?.toISOString(),
+    }));
+
+    if (format === "excel" || format === "xlsx") return sendExcel(res, "users.xlsx", rows);
+    if (format === "pdf") return sendPdf(res, "users.pdf", "Users Export", rows);
+    return sendCsv(res, "users.csv", rows);
+  } catch (error) {
+    res.status(500).json({ message: "Server error", error: error.message });
+  }
+};
+
+// @desc    Per-record audit history for a user
+// @route   GET /api/auth/users/:id/history
+const getUserHistory = async (req, res) => {
+  try {
+    const history = await getRecordHistory("User", req.params.id, req.query);
+    res.status(200).json(history);
+  } catch (error) {
+    res.status(500).json({ message: "Server error", error: error.message });
+  }
+};
+
+// @desc    Login history for one user (admin) — full failed/success trail
+// @route   GET /api/auth/users/:id/login-history
+const getUserLoginHistory = async (req, res) => {
+  try {
+    const { page = 1, limit = 20 } = req.query;
+    const skip = (Number(page) - 1) * Number(limit);
+    const filter = { user: req.params.id };
+    const [logins, total] = await Promise.all([
+      LoginHistory.find(filter).sort({ createdAt: -1 }).skip(skip).limit(Number(limit)),
+      LoginHistory.countDocuments(filter),
+    ]);
+    res.status(200).json({ logins, pagination: buildPagination(total, Number(page), Number(limit)) });
+  } catch (error) {
+    res.status(500).json({ message: "Server error", error: error.message });
+  }
+};
+
+// @desc    My own login history (account security page)
+// @route   GET /api/auth/login-history
+const getMyLoginHistory = async (req, res) => {
+  try {
+    const logins = await LoginHistory.find({ user: req.user._id }).sort({ createdAt: -1 }).limit(50);
+    res.status(200).json({ logins });
   } catch (error) {
     res.status(500).json({ message: "Server error", error: error.message });
   }
@@ -962,6 +1130,12 @@ module.exports = {
   impersonateUser, 
   getAuditLogs, 
   deleteUser,
+  restoreUser,
+  permanentlyDeleteUser,
+  exportUsers,
+  getUserHistory,
+  getUserLoginHistory,
+  getMyLoginHistory,
   adminResetAnyPassword,
   signup,
   getVerificationQueue,

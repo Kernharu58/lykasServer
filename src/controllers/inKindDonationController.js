@@ -1,6 +1,9 @@
 const InKindDonation = require("../models/InKindDonation");
 const AuditLog       = require("../models/AuditLog");
 const { notify }     = require("../utils/notificationHelper");
+const { logChange, getRecordHistory } = require("../utils/auditLogger");
+const { buildListQuery, buildPagination } = require("../utils/queryBuilder");
+const { sendCsv, sendExcel, sendPdf } = require("../utils/exportUtil");
 
 const logAction = async ({ actor, action, metadata }) => {
   try { await AuditLog.create({ actor, action, metadata }); } catch { }
@@ -68,18 +71,25 @@ const getMyDonations = async (req, res) => {
   }
 };
 
-// GET /api/donations/goods  — admin: list all, optional ?status= filter
+// GET /api/donations/goods  — admin: search/sort/filter + pagination
 const getAllDonations = async (req, res) => {
   try {
-    const filter = {};
-    if (req.query.status) filter.status = req.query.status;
+    const { filter, sort, skip, limit, page } = buildListQuery(req.query, {
+      filterFields: ["status", "dropOff"],
+      softDelete: true,
+    });
 
-    const donations = await InKindDonation.find(filter)
-      .populate("donatedBy", "displayName email phone")
-      .sort({ createdAt: -1 })
-      .lean();
+    const [donations, total] = await Promise.all([
+      InKindDonation.find(filter)
+        .populate("donatedBy", "displayName email phone")
+        .sort(sort)
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      InKindDonation.countDocuments(filter),
+    ]);
 
-    res.status(200).json({ donations });
+    res.status(200).json({ donations, pagination: buildPagination(total, page, limit) });
   } catch (error) {
     res.status(500).json({ message: "Server Error", error: error.message });
   }
@@ -131,4 +141,137 @@ const updateStatus = async (req, res) => {
   }
 };
 
-module.exports = { createDonation, getMyDonations, getAllDonations, updateStatus };
+// DELETE /api/donations/goods/:id  — admin: soft delete (recoverable)
+const deleteDonation = async (req, res) => {
+  try {
+    const donation = await InKindDonation.findById(req.params.id);
+    if (!donation) return res.status(404).json({ message: "Donation not found" });
+    if (donation.isDeleted) return res.status(400).json({ message: "Already deleted" });
+
+    donation.isDeleted = true;
+    donation.deletedAt = new Date();
+    donation.deletedBy = req.user._id;
+    await donation.save();
+
+    await logChange({
+      actor: req.user._id,
+      action: "DONATION_SOFT_DELETE",
+      entityType: "InKindDonation",
+      entityId: donation._id,
+      before: { isDeleted: false },
+      after: { isDeleted: true },
+      req,
+    });
+
+    res.status(200).json({ message: "Donation moved to Deleted (recoverable)." });
+  } catch (error) {
+    res.status(500).json({ message: "Server Error", error: error.message });
+  }
+};
+
+// POST /api/donations/goods/:id/restore
+const restoreDonation = async (req, res) => {
+  try {
+    const donation = await InKindDonation.findById(req.params.id);
+    if (!donation) return res.status(404).json({ message: "Donation not found" });
+    if (!donation.isDeleted) return res.status(400).json({ message: "Donation is not deleted" });
+
+    donation.isDeleted = false;
+    donation.deletedAt = null;
+    donation.deletedBy = null;
+    await donation.save();
+
+    await logChange({
+      actor: req.user._id,
+      action: "DONATION_RESTORE",
+      entityType: "InKindDonation",
+      entityId: donation._id,
+      before: { isDeleted: true },
+      after: { isDeleted: false },
+      req,
+    });
+
+    res.status(200).json({ message: "Donation restored.", donation });
+  } catch (error) {
+    res.status(500).json({ message: "Server Error", error: error.message });
+  }
+};
+
+// POST /api/donations/goods/bulk-status  { ids: [...], status: "confirmed"|"received"|"cancelled" }
+const bulkUpdateDonationStatus = async (req, res) => {
+  try {
+    const { ids, status } = req.body;
+    const VALID = ["confirmed", "received", "cancelled"];
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ message: "ids must be a non-empty array" });
+    }
+    if (!VALID.includes(status)) {
+      return res.status(400).json({ message: `Status must be one of: ${VALID.join(", ")}` });
+    }
+
+    const update = { status };
+    if (status === "received") update.receivedAt = new Date();
+    const result = await InKindDonation.updateMany({ _id: { $in: ids } }, update);
+
+    await logChange({
+      actor: req.user._id,
+      action: "DONATION_BULK_STATUS",
+      entityType: "InKindDonation",
+      entityId: null,
+      after: { ids, status },
+      req,
+      metadata: { count: result.modifiedCount },
+    });
+
+    res.status(200).json({ message: `${result.modifiedCount} donation(s) updated to ${status}` });
+  } catch (error) {
+    res.status(500).json({ message: "Server Error", error: error.message });
+  }
+};
+
+// GET /api/donations/goods/export?format=csv
+const exportDonations = async (req, res) => {
+  try {
+    const { filter } = buildListQuery(req.query, { filterFields: ["status"], softDelete: true });
+    const format = (req.query.format || "csv").toLowerCase();
+    const donations = await InKindDonation.find(filter).populate("donatedBy", "displayName email").sort("-createdAt");
+
+    const rows = donations.map((d) => ({
+      id: d._id.toString(),
+      donor: d.donatedBy?.displayName || "",
+      email: d.donatedBy?.email || "",
+      items: d.items.map((i) => `${i.quantity} ${i.unit} ${i.name}`).join("; "),
+      dropOff: d.dropOff,
+      status: d.status,
+      createdAt: d.createdAt?.toISOString(),
+    }));
+
+    if (format === "excel" || format === "xlsx") return sendExcel(res, "donations.xlsx", rows);
+    if (format === "pdf") return sendPdf(res, "donations.pdf", "Goods Donations Export", rows);
+    return sendCsv(res, "donations.csv", rows);
+  } catch (error) {
+    res.status(500).json({ message: "Server Error", error: error.message });
+  }
+};
+
+// GET /api/donations/goods/:id/history
+const getDonationHistory = async (req, res) => {
+  try {
+    const history = await getRecordHistory("InKindDonation", req.params.id, req.query);
+    res.status(200).json(history);
+  } catch (error) {
+    res.status(500).json({ message: "Server Error", error: error.message });
+  }
+};
+
+module.exports = {
+  createDonation,
+  getMyDonations,
+  getAllDonations,
+  updateStatus,
+  deleteDonation,
+  restoreDonation,
+  bulkUpdateDonationStatus,
+  exportDonations,
+  getDonationHistory,
+};

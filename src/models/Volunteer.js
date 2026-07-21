@@ -36,6 +36,10 @@ const volunteerSchema = new mongoose.Schema(
     reviewedAt: { type: Date, default: null },
     totalHours: { type: Number, default: 0 },
     notes: { type: String, default: "" }, // Admin notes
+    // ── Soft delete ─────────────────────────────────────────────────────────
+    isDeleted: { type: Boolean, default: false, index: true },
+    deletedAt: { type: Date, default: null },
+    deletedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
   },
   { timestamps: true }
 );

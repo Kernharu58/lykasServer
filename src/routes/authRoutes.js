@@ -19,6 +19,12 @@ const {
   impersonateUser,
   getAuditLogs,
   deleteUser,
+  restoreUser,
+  permanentlyDeleteUser,
+  exportUsers,
+  getUserHistory,
+  getUserLoginHistory,
+  getMyLoginHistory,
   adminResetAnyPassword, // 👉 Added from your snippet
   getVerificationQueue,
   updateIdentityVerification,
@@ -73,11 +79,17 @@ router.post("/google", googleLogin);
 router.get("/users", adminOnly, getAllUsers);
 // Specific paths declared before "/users/:id/..." so they aren't swallowed by the :id param
 router.get("/users/verification-queue", adminOnly, getVerificationQueue);
+router.get("/users/export", adminOnly, exportUsers);
+router.get("/login-history", protect, getMyLoginHistory);
 router.put("/users/:id/role", adminOnly, updateUserRole);
 router.put("/users/:id/status", adminOnly, updateUserStatus);
 router.put("/users/:id/verification", adminOnly, updateIdentityVerification);
 router.post("/users/:id/impersonate", superAdminOnly, impersonateUser);
 router.delete("/users/:id", adminOnly, deleteUser);
+router.post("/users/:id/restore", adminOnly, restoreUser);
+router.delete("/users/:id/permanent", superAdminOnly, permanentlyDeleteUser);
+router.get("/users/:id/history", adminOnly, getUserHistory);
+router.get("/users/:id/login-history", adminOnly, getUserLoginHistory);
 router.get("/audit-logs", superAdminOnly, getAuditLogs);
 
 // 👉 NEW: Force password reset

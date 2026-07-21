@@ -11,6 +11,7 @@ const Interview        = require("../models/Interview");
 const HomeVisit        = require("../models/HomeVisit");
 const Payment          = require("../models/Payment");
 const EmergencyReport  = require("../models/EmergencyReport");
+const UserDocument     = require("../models/UserDocument");
 const FosterReport     = require("../models/Foster").FosterReport || require("../models/Foster").Foster; // fallback
 
 // ─── ADMIN: Full dashboard summary ───────────────────────────────────────────
@@ -51,11 +52,14 @@ const getDashboard = async (req, res) => {
       flaggedHealthChecks, flaggedMonitoring,
       openEmergencyReports, overdueVaccinations,
 
+      // ── New: adoption throughput + pending documents ──────────────────────
+      dailyAdoptions, monthlyAdoptions, pendingDocuments,
+
     ] = await Promise.all([
-      Pet.countDocuments({ isArchived: { $ne: true } }),
-      Pet.countDocuments({ status: "Available", isArchived: { $ne: true } }),
-      Pet.countDocuments({ status: "Adopted" }),
-      Pet.countDocuments({ status: "Foster" }),
+      Pet.countDocuments({ isArchived: { $ne: true }, isDeleted: { $ne: true } }),
+      Pet.countDocuments({ status: "Available", isArchived: { $ne: true }, isDeleted: { $ne: true } }),
+      Pet.countDocuments({ status: "Adopted", isDeleted: { $ne: true } }),
+      Pet.countDocuments({ status: "Foster", isDeleted: { $ne: true } }),
 
       Application.countDocuments({ status: "pending" }),
       Application.countDocuments({}),
@@ -81,7 +85,19 @@ const getDashboard = async (req, res) => {
       MonitoringReport.countDocuments({ status: "flagged" }),
       EmergencyReport.countDocuments({ status: { $in: ["open", "in_progress"] } }),
       Vaccination.countDocuments({ nextDueDate: { $lte: now } }),
+
+      Application.countDocuments({ status: "approved", type: "adoption", reviewedAt: { $gte: today } }),
+      Application.countDocuments({ status: "approved", type: "adoption", reviewedAt: { $gte: thisMonthStart } }),
+      UserDocument.countDocuments({ status: "pending" }),
     ]);
+
+    // Adoption success rate = approved / (approved + rejected) among decided applications
+    const [decidedApproved, decidedRejected] = await Promise.all([
+      Application.countDocuments({ status: "approved" }),
+      Application.countDocuments({ status: "rejected" }),
+    ]);
+    const decidedTotal = decidedApproved + decidedRejected;
+    const adoptionSuccessRate = decidedTotal > 0 ? +((decidedApproved / decidedTotal) * 100).toFixed(1) : null;
 
     // Recent activity (last 5 of each)
     const [recentApplications, recentPayments, recentEmergencyReports] = await Promise.all([
@@ -102,11 +118,18 @@ const getDashboard = async (req, res) => {
 
     res.status(200).json({
       pets: { total: totalPets, available: availablePets, adopted: adoptedPets, foster: fosterPets },
-      applications: { pending: pendingApplications, total: totalApplications, approvedThisMonth },
+      applications: {
+        pending: pendingApplications,
+        total: totalApplications,
+        approvedThisMonth,
+        dailyAdoptions,
+        monthlyAdoptions,
+        adoptionSuccessRate, // percent, null if no decided applications yet
+      },
       users: { total: totalUsers, newThisMonth: newUsersThisMonth },
       volunteers: { pending: pendingVolunteers, active: activeVolunteers },
       appointments: { today: todayAppointments, upcoming: upcomingAppointments },
-      pipeline: { scheduledInterviews, scheduledHomeVisits, activeFosters },
+      pipeline: { scheduledInterviews, scheduledHomeVisits, activeFosters, pendingDocuments },
       financials: {
         totalDonations:    (totalDonations[0]?.total    || 0) / 100,
       },
@@ -117,6 +140,7 @@ const getDashboard = async (req, res) => {
         overdueVaccinations,
         pendingApplications,
         pendingVolunteers,
+        pendingDocuments,
       },
       recent: { applications: recentApplications, payments: recentPayments, emergencyReports: recentEmergencyReports },
     });

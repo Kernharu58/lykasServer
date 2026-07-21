@@ -107,6 +107,8 @@ const contentRoutes = require("./routes/contentRoutes");
 const shelterRoutes = require("./routes/shelterRoutes");
 const inventoryRoutes = require("./routes/inventoryRoutes");
 const feedbackRoutes = require("./routes/feedbackRoutes");
+const noteRoutes = require("./routes/noteRoutes");
+const systemRoutes = require("./routes/systemRoutes");
 const { protect, restrictTo } = require("./middleware/authMiddleware");
 
 app.use("/api/auth", authRoutes);
@@ -139,6 +141,8 @@ app.use("/api/content", contentRoutes);
 app.use("/api/shelters", shelterRoutes);
 app.use("/api/inventory", inventoryRoutes);
 app.use("/api/feedback", feedbackRoutes);
+app.use("/api/notes", noteRoutes);
+app.use("/api/system", systemRoutes);
 
 // ─── Inline chat routes ───────────────────────────────────────────────────────
 app.get("/api/messages/:userId", protect, async (req, res) => {

@@ -1,6 +1,9 @@
 const Pet = require("../models/Pet");
 const AuditLog = require("../models/AuditLog");
 const Application = require("../models/Application");
+const { logChange, getRecordHistory } = require("../utils/auditLogger");
+const { buildListQuery, buildPagination } = require("../utils/queryBuilder");
+const { sendCsv, sendExcel, sendPdf } = require("../utils/exportUtil");
 
 // Helper for internal logging
 const createAuditLog = async ({ actor, action, targetUser, metadata }) => {
@@ -17,7 +20,7 @@ const createAuditLog = async ({ actor, action, targetUser, metadata }) => {
 const getPets = async (req, res) => {
   try {
     const { category, search, size, age, temperament, energyLevel } = req.query;
-    let query = { status: { $in: ["Available", "Pending"] } };
+    let query = { status: { $in: ["Available", "Pending"] }, isDeleted: { $ne: true } };
     if (category && category !== 'All') query.species = category;
     if (size && size !== 'All') query.size = size;
     if (age && age !== 'All') query.age = { $regex: age, $options: 'i' };
@@ -202,22 +205,152 @@ const updatePet = async (req, res) => {
   }
 };
 
-// @desc    Delete a pet permanently
+// @desc    Soft-delete a pet (recoverable). Use /permanent for a hard delete.
 const deletePet = async (req, res) => {
+  try {
+    const pet = await Pet.findById(req.params.id);
+    if (!pet) return res.status(404).json({ message: "Pet not found" });
+    if (pet.isDeleted) return res.status(400).json({ message: "Pet is already deleted" });
+
+    pet.isDeleted = true;
+    pet.deletedAt = new Date();
+    pet.deletedBy = req.user?._id || null;
+    await pet.save();
+
+    await logChange({
+      actor: req.user?._id,
+      action: "PET_SOFT_DELETE",
+      entityType: "Pet",
+      entityId: pet._id,
+      before: { isDeleted: false },
+      after: { isDeleted: true },
+      req,
+      targetUser: pet.owner,
+      metadata: { petId: pet._id, petName: pet.name },
+    });
+
+    res.status(200).json({ message: "Pet moved to Deleted (recoverable from Archive)." });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// @desc    Restore a soft-deleted pet
+// @route   POST /api/pets/:id/restore
+const restorePet = async (req, res) => {
+  try {
+    const pet = await Pet.findById(req.params.id);
+    if (!pet) return res.status(404).json({ message: "Pet not found" });
+    if (!pet.isDeleted) return res.status(400).json({ message: "Pet is not deleted" });
+
+    pet.isDeleted = false;
+    pet.deletedAt = null;
+    pet.deletedBy = null;
+    await pet.save();
+
+    await logChange({
+      actor: req.user?._id,
+      action: "PET_RESTORE",
+      entityType: "Pet",
+      entityId: pet._id,
+      before: { isDeleted: true },
+      after: { isDeleted: false },
+      req,
+      metadata: { petId: pet._id, petName: pet.name },
+    });
+
+    res.status(200).json({ message: "Pet restored.", pet });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// @desc    Permanently delete a pet (irreversible) — super_admin only, gated in routes
+// @route   DELETE /api/pets/:id/permanent
+const permanentlyDeletePet = async (req, res) => {
   try {
     const pet = await Pet.findByIdAndDelete(req.params.id);
     if (!pet) return res.status(404).json({ message: "Pet not found" });
 
-    await createAuditLog({
+    await logChange({
       actor: req.user?._id,
-      action: "PET_DELETE",
-      targetUser: pet.owner,
-      metadata: { petId: pet._id, petName: pet.name, status: pet.status },
+      action: "PET_PERMANENT_DELETE",
+      entityType: "Pet",
+      entityId: pet._id,
+      before: { name: pet.name, status: pet.status },
+      after: null,
+      req,
+      metadata: { petId: pet._id, petName: pet.name },
     });
-    
-    res.status(200).json({ message: "Pet successfully removed from shelter." });
+
+    res.status(200).json({ message: "Pet permanently deleted." });
   } catch (error) {
     res.status(500).json({ message: error.message });
+  }
+};
+
+// @desc    Admin list — search/sort/filter/pagination, includes Adopted/Foster/
+//          deleted (with ?includeDeleted=true) unlike the public getPets above.
+// @route   GET /api/pets/admin?q=&species=&status=&sortBy=&sortOrder=&page=&limit=&includeDeleted=
+const getAllPetsAdmin = async (req, res) => {
+  try {
+    const { filter, sort, skip, limit, page } = buildListQuery(req.query, {
+      searchFields: ["name", "breed", "description"],
+      filterFields: ["species", "status", "gender", "size"],
+      softDelete: true,
+    });
+
+    const [pets, total] = await Promise.all([
+      Pet.find(filter).populate("owner", "displayName email").sort(sort).skip(skip).limit(limit),
+      Pet.countDocuments(filter),
+    ]);
+
+    res.status(200).json({ pets, pagination: buildPagination(total, page, limit) });
+  } catch (error) {
+    res.status(500).json({ message: "Server Error", error: error.message });
+  }
+};
+
+// @desc    Export pets as CSV/Excel/PDF
+// @route   GET /api/pets/export?format=csv
+const exportPets = async (req, res) => {
+  try {
+    const { filter } = buildListQuery(req.query, {
+      searchFields: ["name", "breed"],
+      filterFields: ["species", "status"],
+      softDelete: true,
+    });
+    const format = (req.query.format || "csv").toLowerCase();
+    const pets = await Pet.find(filter).populate("owner", "displayName email").sort("-createdAt");
+
+    const rows = pets.map((p) => ({
+      id: p._id.toString(),
+      name: p.name,
+      species: p.species,
+      breed: p.breed,
+      age: p.age,
+      gender: p.gender,
+      status: p.status,
+      owner: p.owner?.displayName || "",
+      createdAt: p.createdAt?.toISOString(),
+    }));
+
+    if (format === "excel" || format === "xlsx") return sendExcel(res, "pets.xlsx", rows);
+    if (format === "pdf") return sendPdf(res, "pets.pdf", "Pets Export", rows);
+    return sendCsv(res, "pets.csv", rows);
+  } catch (error) {
+    res.status(500).json({ message: "Server Error", error: error.message });
+  }
+};
+
+// @desc    Per-record audit history for a pet
+// @route   GET /api/pets/:id/history
+const getPetHistory = async (req, res) => {
+  try {
+    const history = await getRecordHistory("Pet", req.params.id, req.query);
+    res.status(200).json(history);
+  } catch (error) {
+    res.status(500).json({ message: "Server Error", error: error.message });
   }
 };
 
@@ -239,4 +372,9 @@ module.exports = {
   adoptPet,
   updatePet,
   deletePet,
+  restorePet,
+  permanentlyDeletePet,
+  getAllPetsAdmin,
+  exportPets,
+  getPetHistory,
 };

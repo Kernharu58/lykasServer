@@ -13,6 +13,11 @@ const {
   adoptPet,
   updatePet,
   deletePet,
+  restorePet,
+  permanentlyDeletePet,
+  getAllPetsAdmin,
+  exportPets,
+  getPetHistory,
 } = require("../controllers/petController");
 
 // Basic Pet Operations
@@ -20,6 +25,12 @@ router.route("/")
   .get(getPets)
   // 👉 2. Add upload.single("image") to intercept the file before creating the pet
   .post(adminOnly, upload.single("image"), createPet); 
+
+// Admin: search/sort/filter/pagination list (includes Adopted/Foster/deleted)
+router.get("/admin", adminOnly, getAllPetsAdmin);
+
+// Admin: export
+router.get("/export", adminOnly, exportPets);
 
 // User-Specific Pet Operations (Must be above /:id)
 router.get("/my-pets", protect, getMyPets);
@@ -35,8 +46,12 @@ router.route("/:id")
   .get(getPetById)
   // 👉 3. Add upload.single("image") to intercept the file before updating the pet
   .put(adminOnly, upload.single("image"), updatePet)     
-  .delete(adminOnly, deletePet); 
-  
+  .delete(adminOnly, deletePet); // soft delete — recoverable via /:id/restore
+
+router.post("/:id/restore", adminOnly, restorePet);
+router.delete("/:id/permanent", protect, restrictTo("super_admin"), permanentlyDeletePet);
+router.get("/:id/history", adminOnly, getPetHistory);
+
 router.post("/:id/adopt", protect, adoptPet);
 
 module.exports = router;

@@ -58,6 +58,35 @@ const applicationSchema = new mongoose.Schema(
       default: "pending",
       index: true,
     },
+    // ── Full approval workflow stage ──────────────────────────────────────
+    // `status` above remains the simple pending/approved/rejected outcome
+    // used everywhere else in the app. `stage` tracks *where in the pipeline*
+    // a pending application currently sits, so the admin UI can show a real
+    // progress tracker instead of just "Pending".
+    stage: {
+      type: String,
+      enum: [
+        "submitted",
+        "document_review",
+        "interview",
+        "home_visit",
+        "risk_assessment",
+        "approved",
+        "adoption_scheduled",
+        "completed",
+        "rejected",
+      ],
+      default: "submitted",
+      index: true,
+    },
+    stageHistory: [
+      {
+        stage: { type: String },
+        changedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+        changedAt: { type: Date, default: Date.now },
+        note: { type: String, trim: true, default: "" },
+      },
+    ],
     reviewedBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",

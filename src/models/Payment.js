@@ -9,8 +9,13 @@ const paymentSchema = new mongoose.Schema(
       index: true,
     },
     type: {
+      // Extended from ["donation"] — the checkout flow also needs to charge
+      // an adoption fee at the end of the approval pipeline (§6.4 step 3)
+      // and an event fee for paid events. refModel already supported
+      // "Application"/"Event" before this change; the type enum just hadn't
+      // caught up to it.
       type: String,
-      enum: ["donation"],
+      enum: ["donation", "adoption_fee", "event_fee"],
       required: true,
       index: true,
     },

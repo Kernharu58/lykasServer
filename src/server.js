@@ -6,10 +6,11 @@ const dotenv = require("dotenv");
 const http = require("http");
 const { Server } = require("socket.io");
 const helmet = require("helmet");
-const rateLimit = require("express-rate-limit");
 
 const Message = require("./models/Message");
 const User = require("./models/User");
+const connectDB = require("./config/db");
+const { connectRedis } = require("./config/redis");
 
 dotenv.config();
 
@@ -27,6 +28,7 @@ app.set("trust proxy", 1);
 
 const apiMonitor = require("./middleware/apiMonitorMiddleware");
 const maintenanceMode = require("./middleware/maintenanceMode");
+const { logServerError } = require("./controllers/errorLogController");
 
 const isDev = process.env.NODE_ENV !== "production";
 const devOrigins = [
@@ -60,15 +62,6 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(helmet());
 
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 500,
-  message: "Too many requests from this IP, please try again later.",
-});
-app.use("/api/", limiter);
-app.use("/api/", apiMonitor);
-app.use(maintenanceMode);
-
 app.get("/health", (_req, res) => {
   res.status(200).json({
     status: "ok",
@@ -81,175 +74,7 @@ app.get("/", (_req, res) => {
   res.send("CarePaws API is running...");
 });
 
-// ─── Routes ───────────────────────────────────────────────────────────────────
-const authRoutes = require("./routes/authRoutes");
-const petRoutes = require("./routes/petRoutes");
-const appointmentRoutes = require("./routes/appointmentRoutes");
-const settingsRoutes = require("./routes/settingsRoutes");
-const applicationRoutes = require("./routes/applicationRoutes");
-const auditLogRoutes = require("./routes/auditLogRoutes");
-const volunteerRoutes = require("./routes/volunteerRoutes");
-const shelterCareRoutes = require("./routes/shelterCareRoutes");
-const medicalRoutes = require("./routes/medicalRecordRoutes");
-const interviewRoutes = require("./routes/interviewRoutes");
-const homeVisitRoutes = require("./routes/homeVisitRoutes");
-const riskAssessmentRoutes = require("./routes/riskAssessmentRoutes");
-const fosterRoutes = require("./routes/fosterRoutes");
-const monitoringReportRoutes = require("./routes/monitoringReportRoutes");
-const babyBookRoutes = require("./routes/babyBookRoutes");
-const eventRoutes = require("./routes/eventRoutes");
-const notificationRoutes = require("./routes/notificationRoutes");
-const paymentRoutes = require("./routes/paymentRoutes");
-const eventAssignmentRoutes = require("./routes/eventAssignmentRoutes");
-const dashboardRoutes = require("./routes/dashboardRoutes");
-const userDocumentRoutes = require("./routes/userDocumentRoutes");
-const adopterProfileRoutes = require("./routes/adopterProfileRoutes");
-const emergencyReportRoutes = require("./routes/emergencyReportRoutes");
-const reportsRoutes = require("./routes/reportsRoutes");
-const inKindDonationRoutes = require("./routes/inKindDonationRoutes"); // ✅ Bug 1 fix
-const analyticsRoutes = require("./routes/analyticsRoutes");
-const contentRoutes = require("./routes/contentRoutes");
-const shelterRoutes = require("./routes/shelterRoutes");
-const inventoryRoutes = require("./routes/inventoryRoutes");
-const feedbackRoutes = require("./routes/feedbackRoutes");
-const noteRoutes = require("./routes/noteRoutes");
-const systemRoutes = require("./routes/systemRoutes");
-const roleRoutes = require("./routes/roleRoutes");
-const backupRoutes = require("./routes/backupRoutes");
-const scheduledJobRoutes = require("./routes/scheduledJobRoutes");
-const emailTemplateRoutes = require("./routes/emailTemplateRoutes");
-const fileAssetRoutes = require("./routes/fileAssetRoutes");
-const apiMonitoringRoutes = require("./routes/apiMonitoringRoutes");
-const archiveRoutes = require("./routes/archiveRoutes");
-const duplicateRoutes = require("./routes/duplicateRoutes");
-const featureFlagRoutes = require("./routes/featureFlagRoutes");
-const announcementRoutes = require("./routes/announcementRoutes");
-const migrationRoutes = require("./routes/migrationRoutes");
-const apiKeyRoutes = require("./routes/apiKeyRoutes");
-const errorLogRoutes = require("./routes/errorLogRoutes");
-const { logServerError } = require("./controllers/errorLogController");
-const { protect, restrictTo } = require("./middleware/authMiddleware");
-
-app.use("/api/auth", authRoutes);
-app.use("/api/pets", petRoutes);
-app.use("/api/appointments", appointmentRoutes);
-app.use("/api/settings", settingsRoutes);
-app.use("/api/applications", applicationRoutes);
-app.use("/api/audit-logs", auditLogRoutes);
-app.use("/api/volunteers", volunteerRoutes);
-app.use("/api/shelter-care", shelterCareRoutes);
-app.use("/api/medical", medicalRoutes);
-app.use("/api/interviews", interviewRoutes);
-app.use("/api/home-visits", homeVisitRoutes);
-app.use("/api/risk-assessments", riskAssessmentRoutes);
-app.use("/api/foster", fosterRoutes);
-app.use("/api/monitoring-reports", monitoringReportRoutes);
-app.use("/api/baby-book", babyBookRoutes);
-app.use("/api/events", eventRoutes);
-app.use("/api/notifications", notificationRoutes);
-app.use("/api/payments", paymentRoutes);
-app.use("/api/event-assignments", eventAssignmentRoutes);
-app.use("/api/dashboard", dashboardRoutes);
-app.use("/api/documents", userDocumentRoutes);
-app.use("/api/adopter-profile", adopterProfileRoutes);
-app.use("/api/emergency-reports", emergencyReportRoutes);
-app.use("/api/reports", reportsRoutes);
-app.use("/api/donations/goods", inKindDonationRoutes); // ✅ Bug 1 fix
-app.use("/api/analytics", analyticsRoutes);
-app.use("/api/content", contentRoutes);
-app.use("/api/shelters", shelterRoutes);
-app.use("/api/inventory", inventoryRoutes);
-app.use("/api/feedback", feedbackRoutes);
-app.use("/api/notes", noteRoutes);
-app.use("/api/system", systemRoutes);
-app.use("/api/roles", roleRoutes);
-app.use("/api/backups", backupRoutes);
-app.use("/api/scheduled-jobs", scheduledJobRoutes);
-app.use("/api/email-templates", emailTemplateRoutes);
-app.use("/api/files", fileAssetRoutes);
-app.use("/api/monitoring/api", apiMonitoringRoutes);
-app.use("/api/archive", archiveRoutes);
-app.use("/api/duplicates", duplicateRoutes);
-app.use("/api/feature-flags", featureFlagRoutes);
-app.use("/api/announcements", announcementRoutes);
-app.use("/api/migrations", migrationRoutes);
-app.use("/api/api-keys", apiKeyRoutes);
-app.use("/api/errors", errorLogRoutes);
-
-// ─── Inline chat routes ───────────────────────────────────────────────────────
-app.get("/api/messages/:userId", protect, async (req, res) => {
-  try {
-    const isAdmin = ["admin", "staff", "super_admin"].includes(req.user.role);
-    const isOwnConversation = req.user._id.toString() === req.params.userId;
-    if (!isAdmin && !isOwnConversation) {
-      return res
-        .status(403)
-        .json({
-          message: "You do not have permission to view these messages.",
-        });
-    }
-    const messages = await Message.find({ userId: req.params.userId }).sort({
-      createdAt: 1,
-    });
-    res.status(200).json(messages);
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-});
-
-app.get(
-  "/api/chat-sessions",
-  protect,
-  restrictTo("admin", "staff", "super_admin"),
-  async (_req, res) => {
-    try {
-      const allUsers = await User.find({}).select("-password");
-      const latestMessages = await Message.aggregate([
-        { $sort: { createdAt: -1 } },
-        {
-          $group: { _id: "$userId", latestMessageAt: { $first: "$createdAt" } },
-        },
-        { $sort: { latestMessageAt: -1 } },
-      ]);
-
-      const activeUserIds = latestMessages.map((msg) => msg._id.toString());
-      const activeUsers = activeUserIds
-        .map((id) => allUsers.find((user) => user._id.toString() === id))
-        .filter(Boolean);
-      const inactiveUsers = allUsers.filter(
-        (user) => !activeUserIds.includes(user._id.toString()),
-      );
-      res.status(200).json([...activeUsers, ...inactiveUsers]);
-    } catch (error) {
-      res.status(500).json({ message: error.message });
-    }
-  },
-);
-
-// ─── Error handlers (must come after all routes) ─────────────────────────────
-app.use((req, res) => {
-  res.status(404).json({ message: "Route not found" });
-});
-
-app.use((err, req, res, _next) => {
-  console.error(err.stack);
-  logServerError({
-    message: err.message,
-    stack: err.stack,
-    route: req.originalUrl,
-    method: req.method,
-    statusCode: 500,
-    userId: req.user?._id || null,
-  });
-  res.status(500).json({ message: "Something went wrong!" });
-});
-
 // ─── HTTP + Socket.IO server ──────────────────────────────────────────────────
-const connectDB = async () => {
-  const conn = await mongoose.connect(process.env.MONGO_URI);
-  console.log(`MongoDB Connected: ${conn.connection.host}`);
-};
-
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
@@ -333,15 +158,163 @@ io.on("connection", (socket) => {
   });
 });
 
-require("./cronJob");
+// ─── Bootstrap ─────────────────────────────────────────────────────────────
+// Mongo and Redis both connect *before* the resource routers are required.
+// This matters specifically for Redis: rateLimitMiddleware.js decides, at
+// require-time, whether each limiter is backed by a RedisStore or falls
+// back to the in-memory default — so those route modules (which pull in
+// rateLimitMiddleware indirectly via authRoutes.js) must not be required
+// until connectRedis() has already resolved, or every limiter would decide
+// "no Redis" permanently regardless of whether the connection succeeds a
+// moment later.
+const bootstrap = async () => {
+  await connectDB();
+  await connectRedis(); // safe no-op if REDIS_URL isn't set — see config/redis.js
 
-connectDB()
-  .then(() => {
-    server.listen(PORT, () => {
-      console.log(`Server is running on port ${PORT}`);
-    });
-  })
-  .catch((error) => {
-    console.error(`Error connecting to MongoDB: ${error.message}`);
-    process.exit(1);
+  const { globalLimiter } = require("./middleware/rateLimitMiddleware");
+  app.use("/api/", globalLimiter);
+  app.use("/api/", apiMonitor);
+  app.use(maintenanceMode);
+
+  // ─── Routes ─────────────────────────────────────────────────────────────
+  const authRoutes = require("./routes/authRoutes");
+  const petRoutes = require("./routes/petRoutes");
+  const appointmentRoutes = require("./routes/appointmentRoutes");
+  const settingsRoutes = require("./routes/settingsRoutes");
+  const applicationRoutes = require("./routes/applicationRoutes");
+  const auditLogRoutes = require("./routes/auditLogRoutes");
+  const volunteerRoutes = require("./routes/volunteerRoutes");
+  const shelterCareRoutes = require("./routes/shelterCareRoutes");
+  const medicalRoutes = require("./routes/medicalRecordRoutes");
+  const interviewRoutes = require("./routes/interviewRoutes");
+  const homeVisitRoutes = require("./routes/homeVisitRoutes");
+  const riskAssessmentRoutes = require("./routes/riskAssessmentRoutes");
+  const fosterRoutes = require("./routes/fosterRoutes");
+  const monitoringReportRoutes = require("./routes/monitoringReportRoutes");
+  const babyBookRoutes = require("./routes/babyBookRoutes");
+  const eventRoutes = require("./routes/eventRoutes");
+  const notificationRoutes = require("./routes/notificationRoutes");
+  const paymentRoutes = require("./routes/paymentRoutes");
+  const eventAssignmentRoutes = require("./routes/eventAssignmentRoutes");
+  const dashboardRoutes = require("./routes/dashboardRoutes");
+  const userDocumentRoutes = require("./routes/userDocumentRoutes");
+  const adopterProfileRoutes = require("./routes/adopterProfileRoutes");
+  const emergencyReportRoutes = require("./routes/emergencyReportRoutes");
+  const reportsRoutes = require("./routes/reportsRoutes");
+  const inKindDonationRoutes = require("./routes/inKindDonationRoutes");
+  const analyticsRoutes = require("./routes/analyticsRoutes");
+  const contentRoutes = require("./routes/contentRoutes");
+  const shelterRoutes = require("./routes/shelterRoutes");
+  const inventoryRoutes = require("./routes/inventoryRoutes");
+  const feedbackRoutes = require("./routes/feedbackRoutes");
+  const noteRoutes = require("./routes/noteRoutes");
+  const systemRoutes = require("./routes/systemRoutes");
+  const roleRoutes = require("./routes/roleRoutes");
+  const backupRoutes = require("./routes/backupRoutes");
+  const scheduledJobRoutes = require("./routes/scheduledJobRoutes");
+  const emailTemplateRoutes = require("./routes/emailTemplateRoutes");
+  const fileAssetRoutes = require("./routes/fileAssetRoutes");
+  const apiMonitoringRoutes = require("./routes/apiMonitoringRoutes");
+  const archiveRoutes = require("./routes/archiveRoutes");
+  const duplicateRoutes = require("./routes/duplicateRoutes");
+  const featureFlagRoutes = require("./routes/featureFlagRoutes");
+  const announcementRoutes = require("./routes/announcementRoutes");
+  const migrationRoutes = require("./routes/migrationRoutes");
+  const apiKeyRoutes = require("./routes/apiKeyRoutes");
+  const errorLogRoutes = require("./routes/errorLogRoutes");
+  const messageRoutes = require("./routes/messageRoutes");
+
+  app.use("/api/auth", authRoutes);
+  app.use("/api/pets", petRoutes);
+  app.use("/api/appointments", appointmentRoutes);
+  app.use("/api/settings", settingsRoutes);
+  app.use("/api/applications", applicationRoutes);
+  app.use("/api/audit-logs", auditLogRoutes);
+  app.use("/api/volunteers", volunteerRoutes);
+  app.use("/api/shelter-care", shelterCareRoutes);
+  app.use("/api/medical", medicalRoutes);
+  app.use("/api/interviews", interviewRoutes);
+  app.use("/api/home-visits", homeVisitRoutes);
+  app.use("/api/risk-assessments", riskAssessmentRoutes);
+  app.use("/api/foster", fosterRoutes);
+  app.use("/api/monitoring-reports", monitoringReportRoutes);
+  app.use("/api/baby-book", babyBookRoutes);
+  app.use("/api/events", eventRoutes);
+  app.use("/api/notifications", notificationRoutes);
+  app.use("/api/payments", paymentRoutes);
+  app.use("/api/event-assignments", eventAssignmentRoutes);
+  app.use("/api/dashboard", dashboardRoutes);
+  app.use("/api/documents", userDocumentRoutes);
+  app.use("/api/adopter-profile", adopterProfileRoutes);
+  app.use("/api/emergency-reports", emergencyReportRoutes);
+  app.use("/api/reports", reportsRoutes);
+  app.use("/api/donations/goods", inKindDonationRoutes);
+  app.use("/api/analytics", analyticsRoutes);
+  app.use("/api/content", contentRoutes);
+  app.use("/api/shelters", shelterRoutes);
+  app.use("/api/inventory", inventoryRoutes);
+  app.use("/api/feedback", feedbackRoutes);
+  app.use("/api/notes", noteRoutes);
+  app.use("/api/system", systemRoutes);
+  app.use("/api/roles", roleRoutes);
+  app.use("/api/backups", backupRoutes);
+  app.use("/api/scheduled-jobs", scheduledJobRoutes);
+  app.use("/api/email-templates", emailTemplateRoutes);
+  app.use("/api/files", fileAssetRoutes);
+  app.use("/api/monitoring/api", apiMonitoringRoutes);
+  app.use("/api/archive", archiveRoutes);
+  app.use("/api/duplicates", duplicateRoutes);
+  app.use("/api/feature-flags", featureFlagRoutes);
+  app.use("/api/announcements", announcementRoutes);
+  app.use("/api/migrations", migrationRoutes);
+  app.use("/api/api-keys", apiKeyRoutes);
+  app.use("/api/errors", errorLogRoutes);
+
+  // Chat REST fallback (§4/§5.3) — extracted out of server.js into a real
+  // route + controller module. GET /api/chat-sessions is mounted as its own
+  // top-level path (not nested under /api/messages) to match the real,
+  // already-shipped API surface exactly.
+  app.use("/api/messages", messageRoutes);
+  app.use("/api/chat-sessions", messageRoutes.chatSessionsRouter);
+
+  // ─── Error handlers (must come after all routes) ───────────────────────
+  app.use((req, res) => {
+    res.status(404).json({ message: "Route not found" });
   });
+
+  app.use((err, req, res, _next) => {
+    console.error(err.stack);
+    logServerError({
+      message: err.message,
+      stack: err.stack,
+      route: req.originalUrl,
+      method: req.method,
+      statusCode: err.status || 500,
+      userId: req.user?._id || null,
+    });
+
+    // Multer reports its own errors (file too large, wrong field name, etc.)
+    // as a MulterError; our upload middleware's fileFilter attaches
+    // `err.status`/`err.code` for unsupported file types (see
+    // middleware/uploadMiddleware.js). Both deserve a 400, not a generic 500.
+    if (err.name === "MulterError") {
+      return res.status(400).json({ message: err.message, code: err.code });
+    }
+    if (err.status && err.status < 500) {
+      return res.status(err.status).json({ message: err.message, code: err.code });
+    }
+
+    res.status(500).json({ message: "Something went wrong!" });
+  });
+
+  require("./cronJob");
+
+  server.listen(PORT, () => {
+    console.log(`Server is running on port ${PORT}`);
+  });
+};
+
+bootstrap().catch((error) => {
+  console.error(`Failed to start server: ${error.message}`);
+  process.exit(1);
+});

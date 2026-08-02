@@ -5,6 +5,17 @@ const { notify } = require("../utils/notificationHelper");
 const PAYMONGO_SECRET = process.env.PAYMONGO_SECRET_KEY;
 const PAYMONGO_BASE   = "https://api.paymongo.com/v1";
 
+// Single source of truth for Payment.type — keep in sync with the enum on
+// the Payment model itself. "donation" is a free-standing gift; "adoption_fee"
+// and "event_fee" both carry a refModel/refId pointing at the Application or
+// Event they belong to.
+const PAYMENT_TYPES = ["donation", "adoption_fee", "event_fee"];
+const DEFAULT_DESCRIPTION_BY_TYPE = {
+  donation: "Donation to CarePaws Shelter",
+  adoption_fee: "CarePaws adoption fee",
+  event_fee: "CarePaws event registration fee",
+};
+
 const logAction = async ({ actor, action, metadata }) => {
   try { await AuditLog.create({ actor, action, metadata }); } catch (e) { /* silent */ }
 };
@@ -34,7 +45,25 @@ const createCheckout = async (req, res) => {
   try {
     // FIX (Critical #1): Accept optional paymentMethod from the client to pre-select in checkout
     const { type, amount, description, refModel, refId, successUrl, cancelUrl, paymentMethod } = req.body;
-    
+
+    if (!type || !PAYMENT_TYPES.includes(type)) {
+      return res.status(400).json({
+        message: `type must be one of: ${PAYMENT_TYPES.join(", ")}`,
+      });
+    }
+
+    // adoption_fee and event_fee always belong to a specific Application/Event —
+    // unlike a free-standing donation, an unattached fee payment is a data-
+    // integrity bug waiting to happen (nothing to reconcile it against later).
+    if (type !== "donation") {
+      const expectedRefModel = type === "adoption_fee" ? "Application" : "Event";
+      if (refModel !== expectedRefModel || !refId) {
+        return res.status(400).json({
+          message: `${type} payments must include refModel: "${expectedRefModel}" and a refId`,
+        });
+      }
+    }
+
     // Map client method key to PayMongo accepted values; fall back to all methods
     const VALID_METHODS = ["gcash", "card", "paymaya", "grab_pay"];
     const selectedMethods = paymentMethod && VALID_METHODS.includes(paymentMethod)
@@ -56,7 +85,7 @@ const createCheckout = async (req, res) => {
           line_items: [{
             currency:    "PHP",
             amount:      amountInCentavos,
-            name:        description || "Donation to Lykas Shelter",
+            name:        description || DEFAULT_DESCRIPTION_BY_TYPE[type],
             quantity:    1,
           }],
           payment_method_types: selectedMethods,
@@ -203,7 +232,7 @@ const getMyPayments = async (req, res) => {
   try {
     const { type, status, page = 1, limit = 20 } = req.query;
     const filter = { paidBy: req.user._id };
-    if (type   && ["donation"].includes(type))       filter.type   = type;
+    if (type   && PAYMENT_TYPES.includes(type))       filter.type   = type;
     if (status && ["pending","paid","failed","refunded"].includes(status)) filter.status = status;
 
     const skip = (Number(page) - 1) * Number(limit);
@@ -241,7 +270,7 @@ const getAllPayments = async (req, res) => {
   try {
     const { type, status, page = 1, limit = 20 } = req.query;
     const filter = {};
-    if (type   && ["donation"].includes(type))       filter.type   = type;
+    if (type   && PAYMENT_TYPES.includes(type))       filter.type   = type;
     if (status && ["pending","paid","failed","refunded"].includes(status)) filter.status = status;
 
     const skip = (Number(page) - 1) * Number(limit);
@@ -278,17 +307,28 @@ const getPaymentById = async (req, res) => {
 // GET /api/payments/summary  (admin dashboard totals)
 const getPaymentSummary = async (req, res) => {
   try {
-    const [totalDonations, pending, failed] = await Promise.all([
+    const [byType, pending, failed] = await Promise.all([
       Payment.aggregate([
-        { $match: { type: "donation", status: "paid" } },
-        { $group: { _id: null, total: { $sum: "$amount" } } },
+        { $match: { status: "paid" } },
+        { $group: { _id: "$type", total: { $sum: "$amount" } } },
       ]),
       Payment.countDocuments({ status: "pending" }),
       Payment.countDocuments({ status: "failed" }),
     ]);
 
+    const totalByType = Object.fromEntries(PAYMENT_TYPES.map((t) => [t, 0]));
+    byType.forEach((row) => {
+      if (row._id in totalByType) totalByType[row._id] = row.total / 100;
+    });
+    const totalPaid = Object.values(totalByType).reduce((sum, v) => sum + v, 0);
+
     res.status(200).json({
-      totalDonations:    (totalDonations[0]?.total    || 0) / 100,
+      // Kept for backward compatibility with any existing dashboard widget
+      // that only ever showed donations.
+      totalDonations:    totalByType.donation,
+      totalAdoptionFees: totalByType.adoption_fee,
+      totalEventFees:    totalByType.event_fee,
+      totalPaid,
       pendingPayments:   pending,
       failedPayments:    failed,
     });

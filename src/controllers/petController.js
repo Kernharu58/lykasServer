@@ -4,6 +4,18 @@ const Application = require("../models/Application");
 const { logChange, getRecordHistory } = require("../utils/auditLogger");
 const { buildListQuery, buildPagination } = require("../utils/queryBuilder");
 const { sendCsv, sendExcel, sendPdf } = require("../utils/exportUtil");
+const { cacheGet, cacheSet, cacheDeleteByPrefix } = require("../utils/cache");
+
+const PETS_LIST_CACHE_PREFIX = "pets:list:";
+const PETS_LIST_CACHE_TTL_SECONDS = 60; // short TTL: a just-adopted pet showing as
+  // "Available" for up to a minute is an acceptable trade-off for cutting DB load
+  // on the public catalog; every write path below also actively invalidates.
+
+// Every write to a Pet (create/update/delete/restore/permanent-delete/adopt)
+// can change what the public catalog should show, and we cache one entry per
+// distinct query-string combination — so instead of guessing which cached
+// combinations are now stale, just clear the whole "pets:list:" family.
+const invalidatePetsListCache = () => cacheDeleteByPrefix(PETS_LIST_CACHE_PREFIX);
 
 // Helper for internal logging
 const createAuditLog = async ({ actor, action, targetUser, metadata }) => {
@@ -20,6 +32,11 @@ const createAuditLog = async ({ actor, action, targetUser, metadata }) => {
 const getPets = async (req, res) => {
   try {
     const { category, search, size, age, temperament, energyLevel } = req.query;
+    const cacheKey = `${PETS_LIST_CACHE_PREFIX}${JSON.stringify(req.query)}`;
+
+    const cached = await cacheGet(cacheKey);
+    if (cached) return res.status(200).json(cached);
+
     let query = { status: { $in: ["Available", "Pending"] }, isDeleted: { $ne: true } };
     if (category && category !== 'All') query.species = category;
     if (size && size !== 'All') query.size = size;
@@ -28,6 +45,8 @@ const getPets = async (req, res) => {
     if (energyLevel && energyLevel !== 'All') query.energyLevel = energyLevel;
     if (search) query.$or = [{ name: { $regex: search, $options: 'i' } }, { breed: { $regex: search, $options: 'i' } }];
     const pets = await Pet.find(query);
+
+    await cacheSet(cacheKey, pets, PETS_LIST_CACHE_TTL_SECONDS);
     res.status(200).json(pets);
   } catch (error) {
     console.error("Error fetching pets:", error);
@@ -73,6 +92,7 @@ const createPet = async (req, res) => {
     }
 
     const pet = await Pet.create(petData);
+    await invalidatePetsListCache();
 
     await createAuditLog({
       actor: req.user?._id,
@@ -153,6 +173,7 @@ const adoptPet = async (req, res) => {
       pet.status = "Pending";
       pet.owner = req.user._id;
       await pet.save();
+      await invalidatePetsListCache();
     }
 
     await createAuditLog({
@@ -191,6 +212,7 @@ const updatePet = async (req, res) => {
     const previousOwner = existingPet.owner;
     Object.assign(existingPet, updateData);
     const pet = await existingPet.save();
+    await invalidatePetsListCache();
 
     await createAuditLog({
       actor: req.user?._id,
@@ -216,6 +238,7 @@ const deletePet = async (req, res) => {
     pet.deletedAt = new Date();
     pet.deletedBy = req.user?._id || null;
     await pet.save();
+    await invalidatePetsListCache();
 
     await logChange({
       actor: req.user?._id,
@@ -247,6 +270,7 @@ const restorePet = async (req, res) => {
     pet.deletedAt = null;
     pet.deletedBy = null;
     await pet.save();
+    await invalidatePetsListCache();
 
     await logChange({
       actor: req.user?._id,
@@ -271,6 +295,7 @@ const permanentlyDeletePet = async (req, res) => {
   try {
     const pet = await Pet.findByIdAndDelete(req.params.id);
     if (!pet) return res.status(404).json({ message: "Pet not found" });
+    await invalidatePetsListCache();
 
     await logChange({
       actor: req.user?._id,

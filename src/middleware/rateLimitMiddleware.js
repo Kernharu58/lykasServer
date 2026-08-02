@@ -1,4 +1,35 @@
 const rateLimit = require("express-rate-limit");
+const { RedisStore } = require("rate-limit-redis");
+const { getRedisClient } = require("../config/redis");
+
+// Every named limiter shares this: if Redis is connected (checked once, at
+// the moment this module is first required — see server.js, which requires
+// this only *after* connectRedis() has resolved), back it with a
+// RedisStore so limits survive restarts and are shared across however many
+// server instances are actually running. If Redis isn't connected, `store`
+// is left undefined and express-rate-limit falls back to its default
+// in-memory MemoryStore — same behavior as before this change, just now the
+// *intended* behavior for local dev rather than an accident in production.
+const buildStore = (prefix) => {
+  const client = getRedisClient();
+  if (!client) return undefined;
+  return new RedisStore({
+    // rate-limit-redis's documented adapter for the node-redis v4+ client.
+    sendCommand: (...args) => client.sendCommand(args),
+    prefix,
+  });
+};
+
+// Global limiter for all of /api/ — mounted first in server.js, ahead of
+// every resource router. 500 requests / 15 min / IP.
+const globalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 500,
+  message: "Too many requests from this IP, please try again later.",
+  standardHeaders: true,
+  legacyHeaders: false,
+  store: buildStore("rl:global:"),
+});
 
 // Rate limit for login attempts: 5 attempts per 15 minutes per IP
 const loginLimiter = rateLimit({
@@ -7,6 +38,7 @@ const loginLimiter = rateLimit({
   message: "Too many login attempts, please try again after 15 minutes",
   standardHeaders: true,
   legacyHeaders: false,
+  store: buildStore("rl:login:"),
   skip: (req, res) => {
     return !req.body.email || !req.body.password;
   },
@@ -19,6 +51,7 @@ const registerLimiter = rateLimit({
   message: "Too many registration attempts, please try again later",
   standardHeaders: true,
   legacyHeaders: false,
+  store: buildStore("rl:register:"),
   skip: (req, res) => {
     // Don't count requests that don't have required fields
     return !req.body.email || !req.body.password || !req.body.displayName;
@@ -32,12 +65,14 @@ const passwordResetLimiter = rateLimit({
   message: "Too many password reset attempts, please try again later",
   standardHeaders: true,
   legacyHeaders: false,
+  store: buildStore("rl:pwreset:"),
   skip: (req, res) => {
     return !req.body.email;
   },
 });
 
 module.exports = {
+  globalLimiter,
   loginLimiter,
   registerLimiter,
   passwordResetLimiter,

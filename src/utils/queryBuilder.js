@@ -44,7 +44,10 @@ const buildListQuery = (query, { searchFields = [], filterFields = [], defaultSo
   }
 
   const pageNum = Math.max(1, Number(page) || 1);
-  const limitNum = Math.max(1, Number(limit) || 20);
+  // Clamp both ends: at least 1 (already the case), at most 100 — without
+  // this, `?limit=999999` forces a full collection scan/transfer on every
+  // list endpoint that uses this helper (§11.7).
+  const limitNum = Math.min(100, Math.max(1, Number(limit) || 20));
   const skip = (pageNum - 1) * limitNum;
 
   return { filter, sort, skip, limit: limitNum, page: pageNum };

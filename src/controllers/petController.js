@@ -1,6 +1,7 @@
 const Pet = require("../models/Pet");
 const AuditLog = require("../models/AuditLog");
 const Application = require("../models/Application");
+const User = require("../models/User");
 const { logChange, getRecordHistory } = require("../utils/auditLogger");
 const { buildListQuery, buildPagination } = require("../utils/queryBuilder");
 const { sendCsv, sendExcel, sendPdf } = require("../utils/exportUtil");
@@ -126,6 +127,22 @@ const adoptPet = async (req, res) => {
     const pet = await Pet.findById(req.params.id);
 
     if (!pet) return res.status(404).json({ message: "Pet not found" });
+
+    // Regular mobile-app users always apply for themselves. Staff/admin/
+    // super_admin may pass an explicit `applicant` id to log a walk-in or
+    // phone-in application on someone else's behalf (§ AdoptionForm) — but
+    // that's a privileged capability, not something any authenticated user
+    // can trigger by just adding a field to their own request body.
+    const isStaff = ["admin", "staff", "super_admin"].includes(req.user.role);
+    let applicant = req.user;
+    if (isStaff && req.body.applicant && req.body.applicant !== req.user._id.toString()) {
+      const chosenApplicant = await User.findById(req.body.applicant);
+      if (!chosenApplicant) {
+        return res.status(404).json({ message: "Selected applicant not found" });
+      }
+      applicant = chosenApplicant;
+    }
+
     if (pet.status === "Adopted") {
       return res.status(400).json({ message: "Pet has already been adopted" });
     }
@@ -136,9 +153,14 @@ const adoptPet = async (req, res) => {
 
     // Adoption applications require a verified identity first (see User Verification
     // workflow). Fostering is intentionally exempt — it has its own lighter-weight vetting.
-    if (type === "adoption" && req.user.identityVerificationStatus !== "verified") {
+    // This check is against the APPLICANT's verification status, not the staff
+    // member's — an admin logging a walk-in application doesn't bypass the gate,
+    // it just means the walk-in adopter still needs to be verified first.
+    if (type === "adoption" && applicant.identityVerificationStatus !== "verified") {
       return res.status(403).json({
-        message: "Please complete identity verification before applying to adopt.",
+        message: isStaff && applicant._id.toString() !== req.user._id.toString()
+          ? `${applicant.displayName} needs to complete identity verification before an adoption application can be logged for them.`
+          : "Please complete identity verification before applying to adopt.",
         code: "IDENTITY_NOT_VERIFIED",
       });
     }
@@ -146,18 +168,18 @@ const adoptPet = async (req, res) => {
     // Prevent duplicate applications of the same type by the same user
     const existingApplication = await Application.findOne({
       pet: pet._id,
-      applicant: req.user._id,
+      applicant: applicant._id,
       type,
       status: "pending",
     });
 
     if (existingApplication) {
-      return res.status(400).json({ message: `You already have a pending ${type} application for this pet` });
+      return res.status(400).json({ message: `${applicant._id.toString() === req.user._id.toString() ? "You already have" : `${applicant.displayName} already has`} a pending ${type} application for this pet` });
     }
 
     const application = await Application.create({
       pet: pet._id,
-      applicant: req.user._id,
+      applicant: applicant._id,
       phone,
       address,
       experience,
@@ -171,7 +193,7 @@ const adoptPet = async (req, res) => {
     // Only mark Pending for adoption-type applications
     if (type === "adoption") {
       pet.status = "Pending";
-      pet.owner = req.user._id;
+      pet.owner = applicant._id;
       await pet.save();
       await invalidatePetsListCache();
     }
@@ -179,8 +201,14 @@ const adoptPet = async (req, res) => {
     await createAuditLog({
       actor: req.user?._id,
       action: type === "foster" ? "FOSTER_APPLICATION_SUBMITTED" : "ADOPTION_APPLICATION_SUBMITTED",
-      targetUser: req.user._id,
-      metadata: { applicationId: application._id, petId: pet._id, petName: pet.name, type },
+      targetUser: applicant._id,
+      metadata: {
+        applicationId: application._id,
+        petId: pet._id,
+        petName: pet.name,
+        type,
+        loggedByStaff: applicant._id.toString() !== req.user._id.toString() ? req.user._id : undefined,
+      },
     });
 
     res.status(201).json({

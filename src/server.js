@@ -9,6 +9,7 @@ const helmet = require("helmet");
 
 const Message = require("./models/Message");
 const User = require("./models/User");
+const Session = require("./models/Session");
 const connectDB = require("./config/db");
 const { connectRedis } = require("./config/redis");
 
@@ -98,6 +99,16 @@ io.use(async (socket, next) => {
 
     const jwt = require("jsonwebtoken");
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
+
+    // Mirrors authMiddleware.js's protect(): a token whose session has been
+    // revoked (logged out elsewhere, "revoke this device", etc.) shouldn't
+    // be able to open a socket connection either, not just be blocked from
+    // REST calls.
+    if (decoded.sessionId) {
+      const session = await Session.findById(decoded.sessionId).select("revoked");
+      if (!session || session.revoked) return next(new Error("Session revoked"));
+    }
+
     const user = await User.findById(decoded.id).select("-password");
     if (!user) return next(new Error("User not found"));
 

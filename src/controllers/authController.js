@@ -12,8 +12,8 @@ const { notify } = require("../utils/notificationHelper");
 const { logChange, getRecordHistory } = require("../utils/auditLogger");
 const { buildListQuery, buildPagination } = require("../utils/queryBuilder");
 const { sendCsv, sendExcel, sendPdf } = require("../utils/exportUtil");
+const { hashRefreshToken, issueTokenPair, rotateTokenPair } = require("../utils/tokenService");
 
-const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || "7d";
 const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:3000";
 const MOBILE_APP_URL = process.env.MOBILE_APP_URL || "lykas://";
 
@@ -89,10 +89,9 @@ const signup = async (req, res) => {
       // Don't fail signup if email fails - user can request email resend later
     }
 
-    // 5. Generate JWT Token for instant login
-    token = jwt.sign({ id: newUser._id }, process.env.JWT_SECRET, {
-      expiresIn: JWT_EXPIRES_IN,
-    });
+    // 5. Issue an access + refresh token pair for instant login (was a single
+    // 7-day JWT with no refresh path — see utils/tokenService.js)
+    const { accessToken, refreshToken } = await issueTokenPair(newUser, req);
 
     // 6. Success response with token for auto-login
     let message = 'Account created successfully!';
@@ -106,7 +105,8 @@ const signup = async (req, res) => {
 
     res.status(201).json({ 
       message,
-      token,
+      token: accessToken,
+      refreshToken,
       user: {
         id: newUser._id,
         email: newUser.email,
@@ -244,30 +244,17 @@ const loginUser = async (req, res) => {
       });
     }
 
-    // 4. Generate a JWT Token
-    const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, {
-      expiresIn: JWT_EXPIRES_IN,
-    });
+    // 4. Issue an access + refresh token pair (was a single 7-day JWT with
+    // no refresh path — see utils/tokenService.js). This also creates the
+    // Session row for "active sessions" / device management.
+    const { accessToken, refreshToken } = await issueTokenPair(user, req);
 
     await recordLogin({ user, email, success: true, reason: "ok", req });
 
-    // Track this token as an active session (Operational Feature: Session Management)
-    try {
-      const decodedForSession = jwt.decode(token);
-      await Session.create({
-        user: user._id,
-        token,
-        ipAddress: req.ip || req.headers["x-forwarded-for"] || null,
-        userAgent: req.headers["user-agent"] || null,
-        expiresAt: new Date(decodedForSession.exp * 1000),
-      });
-    } catch (sessionErr) {
-      console.error("Session create failed:", sessionErr.message);
-    }
-
     res.status(200).json({
       message: "Login successful",
-      token,
+      token: accessToken,
+      refreshToken,
       user: {
         id: user._id,
         displayName: user.displayName,
@@ -427,8 +414,18 @@ const resetPassword = async (req, res) => {
     }
     await user.save();
 
-    // Blacklist all existing tokens for this user
-    await TokenBlacklist.deleteMany({ userId: user._id });
+    // Revoke every active session for this user, so a token obtained before
+    // the reset (e.g. by whoever prompted the reset in the first place)
+    // can't keep refreshing new access tokens after it.
+    //
+    // NOTE: this used to be `TokenBlacklist.deleteMany({ userId: user._id })`
+    // — which actually *removed* existing blacklist entries (un-revoking
+    // previously-revoked tokens), the opposite of what the comment above it
+    // claimed and the opposite of what a password reset should do.
+    await Session.updateMany(
+      { user: user._id, revoked: false },
+      { revoked: true, revokedAt: new Date() },
+    );
 
     await createAuditLog({
       actor: user._id,
@@ -466,7 +463,12 @@ const logoutUser = async (req, res) => {
       reason: "logout",
     });
 
-    await Session.updateOne({ token }, { revoked: true, revokedAt: new Date() });
+    // Revoke the session tied to this access token so its refresh token
+    // can't mint any more access tokens either — sessionId is embedded in
+    // every access token issued by tokenService.js.
+    if (decoded.sessionId) {
+      await Session.updateOne({ _id: decoded.sessionId }, { revoked: true, revokedAt: new Date() });
+    }
 
     await createAuditLog({
       actor: req.user?._id,
@@ -481,16 +483,55 @@ const logoutUser = async (req, res) => {
   }
 };
 
+// @desc    Exchange a refresh token for a new access token (and a rotated
+//          refresh token). Called by both frontends when an API request
+//          comes back 401 with code "TOKEN_EXPIRED".
+// @route   POST /api/auth/refresh
+// @access  Public (the refresh token itself is the credential)
+const refreshAccessToken = async (req, res) => {
+  try {
+    const { refreshToken } = req.body;
+    if (!refreshToken) {
+      return res.status(400).json({ message: "refreshToken is required" });
+    }
+
+    const session = await Session.findOne({
+      refreshTokenHash: hashRefreshToken(refreshToken),
+      revoked: false,
+    });
+
+    if (!session || session.refreshTokenExpiresAt < new Date()) {
+      return res.status(401).json({
+        message: "Session expired or revoked. Please log in again.",
+        code: "REFRESH_INVALID",
+      });
+    }
+
+    const user = await User.findById(session.user);
+    if (!user || user.isDeleted) {
+      return res.status(401).json({ message: "Account is not available.", code: "REFRESH_INVALID" });
+    }
+    if (user.status === "suspended" || user.status === "locked") {
+      return res.status(403).json({ message: `Account is ${user.status}.`, code: "ACCOUNT_UNAVAILABLE" });
+    }
+
+    const { accessToken, refreshToken: newRefreshToken } = await rotateTokenPair(session, user);
+
+    res.status(200).json({ token: accessToken, refreshToken: newRefreshToken });
+  } catch (error) {
+    res.status(500).json({ message: "Server error", error: error.message });
+  }
+};
+
 // @desc    List the requesting user's active (non-revoked, non-expired) sessions
 // @route   GET /api/auth/sessions
 // @access  Private
 const getSessions = async (req, res) => {
   try {
-    const currentToken = req.headers.authorization?.split(" ")[1];
     const sessions = await Session.find({
       user: req.user._id,
       revoked: false,
-      expiresAt: { $gt: new Date() },
+      refreshTokenExpiresAt: { $gt: new Date() },
     }).sort({ lastActiveAt: -1 });
 
     res.status(200).json({
@@ -500,7 +541,7 @@ const getSessions = async (req, res) => {
         userAgent: s.userAgent,
         createdAt: s.createdAt,
         lastActiveAt: s.lastActiveAt,
-        isCurrent: s.token === currentToken,
+        isCurrent: req.sessionId ? s._id.toString() === req.sessionId.toString() : false,
       })),
     });
   } catch (error) {
@@ -520,14 +561,6 @@ const revokeSession = async (req, res) => {
     session.revokedAt = new Date();
     await session.save();
 
-    const decoded = jwt.decode(session.token);
-    await TokenBlacklist.create({
-      token: session.token,
-      userId: req.user._id,
-      expiresAt: decoded?.exp ? new Date(decoded.exp * 1000) : session.expiresAt,
-      reason: "session_revoked",
-    });
-
     res.status(200).json({ message: "Session revoked" });
   } catch (error) {
     res.status(500).json({ message: "Server error", error: error.message });
@@ -539,27 +572,14 @@ const revokeSession = async (req, res) => {
 // @access  Private
 const revokeOtherSessions = async (req, res) => {
   try {
-    const currentToken = req.headers.authorization?.split(" ")[1];
-    const sessions = await Session.find({
+    const filter = {
       user: req.user._id,
       revoked: false,
-      token: { $ne: currentToken },
-    });
+      ...(req.sessionId ? { _id: { $ne: req.sessionId } } : {}),
+    };
+    const result = await Session.updateMany(filter, { revoked: true, revokedAt: new Date() });
 
-    for (const session of sessions) {
-      session.revoked = true;
-      session.revokedAt = new Date();
-      await session.save();
-      const decoded = jwt.decode(session.token);
-      await TokenBlacklist.create({
-        token: session.token,
-        userId: req.user._id,
-        expiresAt: decoded?.exp ? new Date(decoded.exp * 1000) : session.expiresAt,
-        reason: "session_revoked",
-      });
-    }
-
-    res.status(200).json({ message: `${sessions.length} other session(s) revoked` });
+    res.status(200).json({ message: `${result.modifiedCount} other session(s) revoked` });
   } catch (error) {
     res.status(500).json({ message: "Server error", error: error.message });
   }
@@ -1159,12 +1179,10 @@ const googleLogin = async (req, res) => {
       }
     }
 
-    // Generate JWT token
-    const jwtToken = jwt.sign({ id: user._id }, process.env.JWT_SECRET, {
-      expiresIn: JWT_EXPIRES_IN,
-    });
+    // Issue an access + refresh token pair (was a single 7-day JWT)
+    const { accessToken, refreshToken } = await issueTokenPair(user, req);
 
-    console.log(`[Google Auth] ✅ JWT token generated, logging user in`);
+    console.log(`[Google Auth] ✅ Token pair issued, logging user in`);
 
     await createAuditLog({
       actor: user._id,
@@ -1175,7 +1193,8 @@ const googleLogin = async (req, res) => {
 
     res.status(200).json({
       message: "Google login successful",
-      token: jwtToken,
+      token: accessToken,
+      refreshToken,
       user: {
         _id: user._id,
         displayName: user.displayName,
@@ -1219,6 +1238,7 @@ module.exports = {
   forgotPassword,
   resetPassword,
   logoutUser,
+  refreshAccessToken,
   toggleFavorite, 
   getFavorites, 
   getMe, 

@@ -7,6 +7,7 @@ const {
   forgotPassword,
   resetPassword,
   logoutUser,
+  refreshAccessToken,
   toggleFavorite,
   getFavorites,
   getMe,                  
@@ -37,7 +38,7 @@ const {
 // 👉 Added adminAuth to the destructuring list
 const { protect, restrictTo, adminAuth } = require("../middleware/authMiddleware"); 
 const { upload } = require("../config/cloudinary");
-const { loginLimiter, registerLimiter, passwordResetLimiter } = require("../middleware/rateLimitMiddleware");
+const { loginLimiter, registerLimiter, passwordResetLimiter, refreshLimiter } = require("../middleware/rateLimitMiddleware");
 
 const adminOnly = [protect, restrictTo("admin", "staff", "super_admin")];
 const superAdminOnly = [protect, restrictTo("super_admin")];
@@ -59,6 +60,11 @@ router.post("/reset-password", resetPassword);
 
 // @desc    Logout user and blacklist token
 router.post("/logout", protect, logoutUser);
+
+// @desc    Exchange a refresh token for a new access token (public — the
+//          refresh token itself is the credential, there's no access token
+//          to send yet since the old one just expired)
+router.post("/refresh", refreshLimiter, refreshAccessToken);
 
 // ── Session management (Operational Feature) ─────────────────────────────
 router.get("/sessions", protect, getSessions);

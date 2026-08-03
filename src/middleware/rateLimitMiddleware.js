@@ -71,9 +71,23 @@ const passwordResetLimiter = rateLimit({
   },
 });
 
+// Rate limit for token refresh: this fires roughly once per access-token
+// lifetime (~every 20 min) for every *active* session, including multiple
+// tabs/devices per user — so it needs to be far more generous than login,
+// while still bounding brute-force/DoS attempts against the endpoint.
+const refreshLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  message: "Too many token refresh attempts, please try again later",
+  standardHeaders: true,
+  legacyHeaders: false,
+  store: buildStore("rl:refresh:"),
+});
+
 module.exports = {
   globalLimiter,
   loginLimiter,
   registerLimiter,
   passwordResetLimiter,
+  refreshLimiter,
 };

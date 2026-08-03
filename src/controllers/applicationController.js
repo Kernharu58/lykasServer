@@ -7,6 +7,7 @@ const { notify } = require("../utils/notificationHelper");
 const { logChange, getRecordHistory } = require("../utils/auditLogger");
 const { buildListQuery, buildPagination } = require("../utils/queryBuilder");
 const { sendCsv, sendExcel, sendPdf } = require("../utils/exportUtil");
+const { APPLICATION_STAGE_GRAPH, isValidStageTransition } = require("../constants/applicationStageGraph");
 
 // ─── Helper ──────────────────────────────────────────────────────────────────
 const logAction = async ({ actor, action, targetUser, metadata }) => {
@@ -345,6 +346,18 @@ const advanceStage = async (req, res) => {
 
     const application = await Application.findById(req.params.id);
     if (!application) return res.status(404).json({ message: "Application not found" });
+
+    // Beyond "is this a real stage value", also enforce that it's actually
+    // reachable from where the application currently sits — without this,
+    // nothing stopped a request from jumping "submitted" straight to
+    // "completed". See constants/applicationStageGraph.js.
+    if (!isValidStageTransition(application.stage, stage)) {
+      return res.status(400).json({
+        message: `Cannot move from "${application.stage}" to "${stage}" — that's not a valid next stage.`,
+        currentStage: application.stage,
+        validNextStages: APPLICATION_STAGE_GRAPH[application.stage] || [],
+      });
+    }
 
     const previousStage = application.stage;
     application.stage = stage;

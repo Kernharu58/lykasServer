@@ -1,5 +1,6 @@
 const jwt = require("jsonwebtoken");
 const User = require("../models/User");
+const Session = require("../models/Session");
 const TokenBlacklist = require("../models/TokenBlacklist");
 
 const protect = async (req, res, next) => {
@@ -19,7 +20,25 @@ const protect = async (req, res, next) => {
     }
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
+
+    // Access tokens issued by tokenService.js embed the Session they belong
+    // to — checking it here is what makes "revoke this session" (or "revoke
+    // all other sessions") take effect immediately, rather than only once
+    // the access token naturally expires on its own (~20 min). Tokens
+    // without a sessionId (e.g. the separate short-lived impersonation
+    // token minted by impersonateUser) skip this check by design.
+    if (decoded.sessionId) {
+      const session = await Session.findById(decoded.sessionId).select("revoked");
+      if (!session || session.revoked) {
+        return res.status(401).json({
+          message: "This session has been revoked. Please log in again.",
+          code: "SESSION_REVOKED",
+        });
+      }
+    }
+
     req.user = await User.findById(decoded.id).select("-password");
+    req.sessionId = decoded.sessionId || null;
 
     if (!req.user) {
       return res.status(401).json({ message: "User not found" });
@@ -51,8 +70,16 @@ const protect = async (req, res, next) => {
 
     next();
   } catch (error) {
-    // BUG FIX: return early to prevent double-response when token is invalid
-    return res.status(401).json({ message: "Not authorized, token failed" });
+    // Access tokens now expire quickly (~20 min by default) as a deliberate
+    // trade-off for a smaller stolen-token blast radius — which means
+    // clients need to hit this path far more often than the old 7-day
+    // tokens ever did. Tell them explicitly when it's "call POST
+    // /api/auth/refresh" (expected, frequent, not an error worth logging
+    // loudly) versus "the token itself is bad" (re-auth from scratch).
+    if (error.name === "TokenExpiredError") {
+      return res.status(401).json({ message: "Access token expired", code: "TOKEN_EXPIRED" });
+    }
+    return res.status(401).json({ message: "Not authorized, token failed", code: "TOKEN_INVALID" });
   }
 };
 

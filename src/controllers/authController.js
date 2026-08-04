@@ -697,6 +697,21 @@ const updateProfile = async (req, res) => {
   }
 };
 
+// @desc    Register (or clear) this device's Expo push token
+// @route   PUT /api/auth/push-token
+// @access  Private
+const updatePushToken = async (req, res) => {
+  try {
+    const { pushToken } = req.body;
+    // Allow null/empty to explicitly clear it (e.g. on logout, or if the
+    // app detects permission was revoked) — not just set a new one.
+    await User.updateOne({ _id: req.user._id }, { pushToken: pushToken || null });
+    res.status(200).json({ message: "Push token updated" });
+  } catch (error) {
+    res.status(500).json({ message: "Server error", error: error.message });
+  }
+};
+
 // 👉 NEW: Get all users for the Admin Dashboard
 // @route   GET /api/auth/users
 const getAllUsers = async (req, res) => {
@@ -1244,6 +1259,7 @@ module.exports = {
   getMe, 
   uploadProfilePicture, 
   updateProfile, 
+  updatePushToken,
   googleLogin,
   getAllUsers, 
   updateUserRole, 

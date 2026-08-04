@@ -13,6 +13,7 @@ const {
   getMe,                  
   uploadProfilePicture,
   updateProfile,
+  updatePushToken,
   googleLogin,
   getAllUsers,
   updateUserRole,
@@ -76,6 +77,9 @@ router.get("/me", protect, getMe);
 
 // 👉 NEW: Update user profile details
 router.put("/profile", protect, updateProfile);
+
+// @desc    Register/clear this device's Expo push token
+router.put("/push-token", protect, updatePushToken);
 
 // @desc    Upload & Update Profile Picture
 router.post("/profile-picture", protect, upload.single("image"), uploadProfilePicture);

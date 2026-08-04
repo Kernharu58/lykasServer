@@ -66,6 +66,16 @@ const userSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    // Expo push token (e.g. "ExponentPushToken[xxxxxxxx]"), registered by the
+    // mobile app after the user grants notification permission — see
+    // utils/pushNotifications.ts (lykasUser) and PUT /api/auth/push-token.
+    // null until the app has actually registered one; notify() (backend)
+    // only attempts a push send when both this and notificationsEnabled
+    // are set.
+    pushToken: {
+      type: String,
+      default: null,
+    },
     favorites: [
       {
         type: mongoose.Schema.Types.ObjectId,
